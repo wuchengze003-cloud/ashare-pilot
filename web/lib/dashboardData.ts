@@ -271,28 +271,55 @@ export function buildSymbolSeriesFromPyserverCache(
   if (!fs.existsSync(dbPath)) return { series: [], benchmark: [] };
   const db = new Database(dbPath, { readonly: true });
   try {
-    const latestKline = db.prepare(
-      "SELECT payload FROM cache WHERE key LIKE ? ORDER BY fetched_at DESC LIMIT 1",
+    const cachedKlines = db.prepare(
+      "SELECT payload, fetched_at FROM cache WHERE key LIKE ? ORDER BY fetched_at ASC",
     );
     const loadRows = (symbol: string): PriceRow[] => {
-      const row = latestKline.get(`kline:${symbol}:%:qfq`) as { payload: string } | undefined;
-      if (!row) return [];
-      return (JSON.parse(row.payload) as Array<{
-        date: string;
-        open: number;
-        high: number;
-        low: number;
-        close: number;
-        volume: number;
-      }>).map((r) => ({
-        date: r.date,
-        open: r.open,
-        high: r.high,
-        low: r.low,
-        close: r.close,
-        volume: r.volume,
-        ticker: toDataSourceTicker(symbol),
-      }));
+      const rows = cachedKlines.all(`kline:${symbol}:%:qfq`) as Array<{
+        payload: string;
+        fetched_at: number;
+      }>;
+      if (rows.length === 0) return [];
+
+      const byDate = new Map<string, { row: PriceRow; fetchedAt: number }>();
+      for (const cacheRow of rows) {
+        let payload: Array<{
+          date: string;
+          open: number;
+          high: number;
+          low: number;
+          close: number;
+          volume: number;
+        }>;
+        try {
+          payload = JSON.parse(cacheRow.payload);
+        } catch {
+          continue;
+        }
+        if (!Array.isArray(payload)) continue;
+
+        for (const r of payload) {
+          if (!r.date) continue;
+          const existing = byDate.get(r.date);
+          if (existing && existing.fetchedAt > cacheRow.fetched_at) continue;
+          byDate.set(r.date, {
+            fetchedAt: cacheRow.fetched_at,
+            row: {
+              date: r.date,
+              open: r.open,
+              high: r.high,
+              low: r.low,
+              close: r.close,
+              volume: r.volume,
+              ticker: toDataSourceTicker(symbol),
+            },
+          });
+        }
+      }
+
+      return [...byDate.values()]
+        .map((item) => item.row)
+        .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     };
 
     const series: SymbolSeries[] = [];
