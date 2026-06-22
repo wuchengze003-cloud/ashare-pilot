@@ -34,6 +34,10 @@ export interface FinancialRow {
 export function toDataSourceTicker(symbol: string): string {
   const s = symbol.trim();
   if (/\.(SH|SZ|BJ|HK)$/i.test(s)) return s.toUpperCase();
+  if (/^sh/i.test(s)) return `${s.slice(2)}.SH`;
+  if (/^sz/i.test(s)) return `${s.slice(2)}.SZ`;
+  if (/^bj/i.test(s)) return `${s.slice(2)}.BJ`;
+  if (/^hk/i.test(s)) return `${s.slice(2).padStart(5, "0")}.HK`;
   if (/^(60|68|9)/.test(s)) return `${s}.SH`;
   if (/^(00|30|20)/.test(s)) return `${s}.SZ`;
   if (/^(4|8|92)/.test(s)) return `${s}.BJ`;
@@ -336,7 +340,8 @@ export function buildSymbolSeriesFromPyserverCache(
       }));
       series.push({ entry, klines });
     }
-    return { series, benchmark: loadRows("000300") };
+    const benchmark = loadRows("sh000300");
+    return { series, benchmark: benchmark.length > 0 ? benchmark : loadRows("000300") };
   } finally {
     db.close();
   }

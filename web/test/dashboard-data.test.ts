@@ -58,3 +58,27 @@ test("pyserver cache loader merges short fresh caches with longer history", () =
   assert.equal(series[0].klines.at(-1)?.date, "2026-02-05");
   assert.equal(series[0].klines.at(-1)?.close, 501);
 });
+
+test("pyserver cache loader reads CSI 300 benchmark from sh-prefixed key", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "scc-dashboard-benchmark-"));
+  const dbPath = path.join(tmp, "cache.db");
+  const db = new Database(dbPath);
+  db.exec(`
+    CREATE TABLE cache (
+      key TEXT PRIMARY KEY,
+      payload TEXT NOT NULL,
+      fetched_at INTEGER NOT NULL,
+      ttl_seconds INTEGER NOT NULL
+    )
+  `);
+
+  db.prepare(
+    "INSERT INTO cache (key, payload, fetched_at, ttl_seconds) VALUES (?, ?, ?, ?)",
+  ).run("kline:sh000300:20260101:20260205:qfq", JSON.stringify(makeRows("2026-01-01", 36, 4000)), 1_000, 3600);
+  db.close();
+
+  const { benchmark } = buildSymbolSeriesFromPyserverCache([], dbPath);
+
+  assert.equal(benchmark.length, 36);
+  assert.equal(benchmark.at(-1)?.ticker, "000300.SH");
+});

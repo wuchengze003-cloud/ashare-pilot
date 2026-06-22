@@ -51,7 +51,7 @@ async function main() {
   const start = yyyymmdd(padStart);
   const end = requestedEnd.replaceAll("-", "");
   const entries = loadEntries();
-  const symbols = [...new Set(["000300", ...entries.map((entry) => entry.symbol)])];
+  const symbols = [...new Set(["sh000300", ...entries.map((entry) => entry.symbol)])];
   const concurrency = Number(process.env.UPDATE_QUANT_CONCURRENCY ?? 3);
 
   console.log(`Refreshing ${symbols.length} kline series from ${start} to ${end}`);
