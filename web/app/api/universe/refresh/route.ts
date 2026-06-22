@@ -6,7 +6,16 @@ export const runtime = "nodejs";
 export const maxDuration = 180;
 
 // NDJSON: progress / log / result / error
-export async function POST(_req: NextRequest) {
+export async function POST(req: NextRequest) {
+  const token = process.env.UNIVERSE_REFRESH_TOKEN;
+  const provided = req.headers.get("x-universe-refresh-token");
+  if (!token || provided !== token) {
+    return Response.json(
+      { error: "Universe refresh is backend-only. Run the server-side research refresh workflow with an internal token." },
+      { status: 403 },
+    );
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {

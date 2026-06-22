@@ -3,10 +3,16 @@ export interface DashboardData {
   config: {
     startCash: number;
     rebalanceEveryNDays: number;
+    decisionEveryNDays?: number;
+    executionPrice?: "next_open";
     startDate: string;
     endDate: string;
     feeBps: number;
     maxPositions: number;
+    minHoldBars?: number;
+    rebalanceThresholdPct?: number;
+    sharpeTarget?: number;
+    optimizationWindow?: string;
   };
   stats: {
     totalReturnPct: number;
@@ -14,6 +20,8 @@ export interface DashboardData {
     maxDrawdownPct: number;
     sharpe: number;
     trades: number;
+    winRatePct?: number;
+    turnoverPct?: number;
   };
   equityCurve: Array<{
     date: string;
@@ -24,10 +32,17 @@ export interface DashboardData {
   benchmarkCurve: Array<{ date: string; equity: number }>;
   trades: Array<{
     date: string;
+    decisionDate?: string;
+    tradeDate?: string;
+    priceField?: "open";
     symbol: string;
-    side: "buy" | "sell";
+    side: "buy" | "sell" | "reduce";
     shares: number;
     price: number;
+    reason?: string;
+    targetWeightBefore?: number;
+    targetWeightAfter?: number;
+    pnlPct?: number | null;
   }>;
   themePerformance: Array<{
     theme: string;
@@ -39,4 +54,31 @@ export interface DashboardData {
   }>;
   latestHoldings: Record<string, { shares: number; price: number }>;
   latestDate: string;
+  latestPlan?: {
+    decisionDate: string;
+    executionPrice: "next_open";
+    source: "dashboard-latest-close";
+    scoreModel: "dashboard-rule";
+    maxPositions: number;
+    minScoreToBuy?: number;
+    signals: Array<{
+      symbol: string;
+      action: "buy" | "hold" | "sell";
+      confidence: number;
+      size: number;
+      rationale: string;
+    }>;
+  };
+  meetsSharpeTarget?: boolean;
+  primaryWindow?: string;
+  validationStats?: {
+    jan_2026?: DashboardData["stats"];
+  };
+  optimizedParams?: {
+    maxPositions: number;
+    minHoldBars: number;
+    rebalanceThresholdPct: number;
+    minScoreToBuy: number;
+  };
+  optimizationWarnings?: string[];
 }

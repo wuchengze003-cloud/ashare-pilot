@@ -33,6 +33,7 @@ th { color: var(--muted); font-weight: 600; background: var(--card); position: s
   background: var(--card-2); color: var(--muted); }
 .badge.buy { background: var(--accent-weak); color: var(--accent); }
 .badge.sell { background: rgba(255,107,107,.15); color: var(--danger); }
+.badge.reduce { background: rgba(242,184,75,.16); color: var(--warn); }
 button, .button { display: inline-flex; align-items: center; justify-content: center; min-height: 36px;
   background: var(--accent); color: #07170b; border: 0; padding: 8px 14px; border-radius: 6px;
   font-weight: 600; cursor: pointer; }
@@ -59,6 +60,16 @@ input, select { background: var(--field); color: var(--fg); border: 1px solid va
 .metric .label { color: var(--muted); font-size: 12px; }
 .metric strong { font-size: 24px; line-height: 1.1; }
 .metric span:last-child { color: var(--muted); font-size: 12px; }
+.strategy-panel { margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
+.strategy-panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.strategy-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
+.strategy-grid > div { min-width: 0; padding-top: 12px; border-top: 1px solid var(--border); }
+.strategy-label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.strategy-grid strong { display: block; font-size: 14px; line-height: 1.45; }
+.strategy-grid p { margin-top: 4px; font-size: 12px; }
+.status-strip { margin-top: 10px; padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.45; }
+.status-strip.good { border: 1px solid rgba(99,212,113,.45); background: var(--accent-weak); color: var(--accent); }
+.warning-strip { margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(242,184,75,.45); border-radius: 8px; background: rgba(242,184,75,.1); color: var(--warn); font-size: 13px; line-height: 1.45; }
 .section-heading { display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; margin-top: 28px; }
 .toolbar { margin-top: 14px; display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
 .field { display: flex; flex-direction: column; gap: 5px; min-width: 180px; }
@@ -67,6 +78,7 @@ input, select { background: var(--field); color: var(--fg); border: 1px solid va
 .toolbar-status { margin-left: auto; color: var(--muted); font-size: 12px; min-height: 34px; display: flex; align-items: center; }
 .fetch-progress { flex: 1 1 100%; display: flex; flex-direction: column; gap: 6px; padding-top: 2px; }
 .fetch-progress-meta, .fetch-progress-detail { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }
+.fetch-progress-warning { color: var(--warn); font-size: 12px; line-height: 1.45; }
 .fetch-progress-track { height: 8px; overflow: hidden; border-radius: 999px; background: var(--field); border: 1px solid var(--border); }
 .fetch-progress-bar { height: 100%; min-width: 2px; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--warn)); transition: width .25s ease; }
 .theme-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
@@ -90,7 +102,8 @@ input, select { background: var(--field); color: var(--fg); border: 1px solid va
   .container { padding: 16px; }
   .page-header, .section-heading { flex-direction: column; align-items: stretch; }
   .header-actions { justify-content: flex-start; }
-  .summary-grid, .theme-grid { grid-template-columns: 1fr; }
+  .summary-grid, .theme-grid, .strategy-grid { grid-template-columns: 1fr; }
+  .strategy-panel-head { flex-direction: column; }
   .toolbar-status { margin-left: 0; width: 100%; }
   .field { flex: 1 1 160px; }
 }

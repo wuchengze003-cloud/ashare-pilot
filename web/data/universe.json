@@ -1,7 +1,7 @@
 {
   "$schema_note": "硅基文明消费股 watchlist. Edit via UI or directly. Each entry: {symbol, name, theme, note?}.",
-  "updated_at": "2026-06-12",
-  "updated_by": "deepseek-refresh",
+  "updated_at": "2026-06-17",
+  "updated_by": "backend-research-refresh",
   "entries": [
     {
       "symbol": "688256",
@@ -602,6 +602,55 @@
       "name": "中兴通讯",
       "theme": "AI服务器",
       "note": "ICT龙头，AI服务器出货量国内前列，算力基础设施核心供应商",
+      "global_supply": false
+    },
+    {
+      "symbol": "600905",
+      "name": "三峡能源",
+      "theme": "电力",
+      "note": "绿电龙头，为AI数据中心提供清洁能源",
+      "global_supply": false
+    },
+    {
+      "symbol": "002518",
+      "name": "科士达",
+      "theme": "电力设备",
+      "note": "数据中心UPS及精密空调龙头",
+      "global_supply": false
+    },
+    {
+      "symbol": "600089",
+      "name": "特变电工",
+      "theme": "电力设备",
+      "note": "特高压/变压器龙头，配套AIDC供电",
+      "global_supply": false
+    },
+    {
+      "symbol": "300408",
+      "name": "三环集团",
+      "theme": "功率器件",
+      "note": "MLCC及陶瓷封装龙头，AI服务器大量使用被动元件",
+      "global_supply": false
+    },
+    {
+      "symbol": "600667",
+      "name": "太极实业",
+      "theme": "存储/HBM",
+      "note": "旗下海太半导体为SK海力士提供后工序，含HBM封装",
+      "global_supply": true
+    },
+    {
+      "symbol": "300249",
+      "name": "依米康",
+      "theme": "液冷",
+      "note": "数据中心精密温控龙头，提供液冷解决方案",
+      "global_supply": false
+    },
+    {
+      "symbol": "600845",
+      "name": "宝信软件",
+      "theme": "IDC",
+      "note": "宝之云IDC龙头，提供AI算力基础设施",
       "global_supply": false
     }
   ]

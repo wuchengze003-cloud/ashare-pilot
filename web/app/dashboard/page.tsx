@@ -1,6 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
 import Link from "next/link";
+import { readRuntimeJson } from "@/lib/runtimeData";
 import { loadEntries } from "@/lib/universe";
 import { EquityChart, ThemeChart } from "./Charts";
 import type { DashboardData } from "./types";
@@ -8,9 +7,7 @@ import type { DashboardData } from "./types";
 export const dynamic = "force-dynamic";
 
 function loadDashboardData(): DashboardData | null {
-  const file = path.join(process.cwd(), "data", "dashboard-backtest.json");
-  if (!fs.existsSync(file)) return null;
-  return JSON.parse(fs.readFileSync(file, "utf-8")) as DashboardData;
+  return readRuntimeJson<DashboardData>("backtest.json");
 }
 
 function pct(v: number, digits = 2) {
@@ -19,6 +16,12 @@ function pct(v: number, digits = 2) {
 
 function money(v: number) {
   return `¥${Math.round(v).toLocaleString("en-US")}`;
+}
+
+function sideLabel(side: "buy" | "sell" | "reduce") {
+  if (side === "buy") return "买入";
+  if (side === "reduce") return "减仓";
+  return "卖出";
 }
 
 export default function DashboardPage() {
@@ -47,8 +50,29 @@ export default function DashboardPage() {
         .sort((a, b) => b.returnPct - a.returnPct)
     : [];
 
-  const benchmarkFinalEquity = data?.benchmarkCurve.at(-1)?.equity ?? data?.config.startCash ?? 0;
-  const benchmarkReturnPct = data ? ((benchmarkFinalEquity / data.config.startCash) - 1) * 100 : 0;
+  const hasBenchmark = Boolean(data?.benchmarkCurve.length);
+  const benchmarkFinalEquity = data?.benchmarkCurve.at(-1)?.equity ?? null;
+  const benchmarkReturnPct =
+    data && hasBenchmark && benchmarkFinalEquity != null
+      ? ((benchmarkFinalEquity / data.config.startCash) - 1) * 100
+      : null;
+  const sharpeTarget = data?.config.sharpeTarget ?? 3;
+  const meetsSharpeTarget = data ? data.meetsSharpeTarget ?? data.stats.sharpe >= sharpeTarget : false;
+  const decisionEveryNDays = data ? data.config.decisionEveryNDays ?? data.config.rebalanceEveryNDays : 1;
+  const decisionCadenceLabel = decisionEveryNDays <= 1 ? "每日" : `每 ${decisionEveryNDays} 日`;
+  const latestBar = data?.equityCurve.at(-1) ?? null;
+  const holdings = data
+    ? Object.entries(data.latestHoldings)
+        .map(([sym, pos]) => ({
+          sym,
+          pos,
+          value: pos.shares * pos.price,
+        }))
+        .sort((a, b) => b.value - a.value)
+    : [];
+  const holdingsValue = holdings.reduce((sum, item) => sum + item.value, 0);
+  const latestCash = latestBar?.cash ?? 0;
+  const latestEquity = latestBar?.equity ?? holdingsValue + latestCash;
 
   return (
     <div className="container">
@@ -58,8 +82,8 @@ export default function DashboardPage() {
           <div className="eyebrow">Dashboard</div>
           <h1>策略 Dashboard</h1>
           <p>
-            基于项目股票池与 40/30/30 选股逻辑的规则化回测。数据来自 stock_finance_data，
-            前复权价格、财报披露延迟处理，避免未来信息泄露。
+            基于项目股票池的可复现规则回测；当前生成脚本默认使用右侧价格-主题-量能规则。
+            数据来自本地行情侧车缓存，信号按每日收盘决策、次日开盘成交口径生成。
           </p>
         </div>
       </header>
@@ -68,10 +92,9 @@ export default function DashboardPage() {
         <div className="card" style={{ borderColor: "var(--warn)" }}>
           <strong>尚未生成回测数据</strong>
           <p style={{ color: "var(--muted)" }}>
-            请先由 agent 通过 kimi-datasource 拉取行情与财报 CSV 到{" "}
-            <code>web/.cache/datasource/</code>，然后运行{" "}
-            <code>cd web && npx tsx scripts/build-dashboard.ts</code>。
-            详见 AGENTS.md。
+            收盘后运行 <code>cd web && npm run dashboard:update</code>。
+            该命令会刷新行情缓存、重建量化模拟仓和明日计划，并写入 ignored 的{" "}
+            <code>web/data/runtime</code>。
           </p>
         </div>
       )}
@@ -82,15 +105,21 @@ export default function DashboardPage() {
             <Kpi label="总收益" value={pct(data.stats.totalReturnPct)} pos={data.stats.totalReturnPct >= 0} />
             <Kpi label="年化" value={pct(data.stats.cagrPct)} pos={data.stats.cagrPct >= 0} />
             <Kpi label="最大回撤" value={pct(data.stats.maxDrawdownPct)} pos={false} />
-            <Kpi label="夏普" value={data.stats.sharpe.toFixed(2)} pos={data.stats.sharpe >= 0} />
+            <Kpi label="夏普" value={data.stats.sharpe.toFixed(2)} pos={meetsSharpeTarget} />
             <Kpi label="交易次数" value={data.stats.trades.toString()} />
-            <Kpi label="沪深300基准" value={pct(benchmarkReturnPct)} pos={benchmarkReturnPct >= 0} />
+            <Kpi label="胜率" value={data.stats.winRatePct == null ? "暂无" : pct(data.stats.winRatePct)} pos={(data.stats.winRatePct ?? 0) >= 50} />
+            <Kpi label="换手" value={data.stats.turnoverPct == null ? "暂无" : pct(data.stats.turnoverPct, 0)} />
+            <Kpi
+              label="沪深300基准"
+              value={benchmarkReturnPct == null ? "暂无数据" : pct(benchmarkReturnPct)}
+              pos={benchmarkReturnPct == null ? undefined : benchmarkReturnPct >= 0}
+            />
           </div>
 
           <div className="row" style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
             <span>回测区间 {data.config.startDate} → {data.config.endDate}</span>
             <span>·</span>
-            <span>每 {data.config.rebalanceEveryNDays} 个交易日调仓</span>
+            <span>{decisionCadenceLabel}收盘决策，次日开盘成交</span>
             <span>·</span>
             <span>最大持仓 {data.config.maxPositions} 只</span>
             <span>·</span>
@@ -98,6 +127,15 @@ export default function DashboardPage() {
             <span>·</span>
             <span>生成于 {new Date(data.generated_at).toLocaleString("zh-CN")}</span>
           </div>
+          {meetsSharpeTarget ? (
+            <div className="status-strip good">
+              Sharpe 目标已达标：当前 {data.stats.sharpe.toFixed(2)} / 目标 {sharpeTarget.toFixed(1)}。
+            </div>
+          ) : (
+            <div className="warning-strip">
+              Sharpe 目标未达标：当前 {data.stats.sharpe.toFixed(2)} / 目标 {sharpeTarget.toFixed(1)}。
+            </div>
+          )}
 
           <h2 className="subheading">权益曲线 vs 沪深300</h2>
           <div className="card chart-card">
@@ -111,23 +149,38 @@ export default function DashboardPage() {
 
           <div className="theme-grid" style={{ marginTop: 16 }}>
             <div className="theme-panel">
-              <div className="theme-title"><strong>当前持仓</strong><span>{data.latestDate}</span></div>
+              <div className="theme-title">
+                <strong>量化模拟仓</strong>
+                <span>
+                  {data.latestDate} · {holdings.length} 只 · 股票 {money(holdingsValue)} · 现金 {money(latestCash)}
+                </span>
+              </div>
               <div className="table-wrap compact-table">
                 <table>
                   <thead>
-                    <tr><th>代码</th><th>名称</th><th>主题</th><th className="num">数量</th><th className="num">市值</th></tr>
+                    <tr>
+                      <th>代码</th>
+                      <th>名称</th>
+                      <th>主题</th>
+                      <th className="num">数量</th>
+                      <th className="num">价格</th>
+                      <th className="num">市值</th>
+                      <th className="num">权重</th>
+                    </tr>
                   </thead>
                   <tbody>
-                    {Object.entries(data.latestHoldings).length === 0 && (
-                      <tr><td colSpan={5} className="muted">空仓</td></tr>
+                    {holdings.length === 0 && (
+                      <tr><td colSpan={7} className="muted">空仓</td></tr>
                     )}
-                    {Object.entries(data.latestHoldings).map(([sym, pos]) => (
+                    {holdings.map(({ sym, pos, value }) => (
                       <tr key={sym}>
                         <td className="mono">{sym}</td>
-                        <td>{nameMap.get(sym) ?? "—"}</td>
-                        <td>{themeMap.get(sym) ?? "—"}</td>
-                        <td className="num">{pos.shares}</td>
-                        <td className="num">{money(pos.shares * pos.price)}</td>
+                        <td>{nameMap.get(sym) ?? "名称未收录"}</td>
+                        <td>{themeMap.get(sym) ?? "主题未收录"}</td>
+                        <td className="num">{Math.round(pos.shares).toLocaleString("en-US")}</td>
+                        <td className="num">{pos.price.toFixed(2)}</td>
+                        <td className="num">{money(value)}</td>
+                        <td className="num">{((value / (latestEquity || 1)) * 100).toFixed(1)}%</td>
                       </tr>
                     ))}
                   </tbody>
@@ -140,14 +193,15 @@ export default function DashboardPage() {
               <div className="table-wrap compact-table">
                 <table>
                   <thead>
-                    <tr><th>日期</th><th>代码</th><th>方向</th><th className="num">数量</th><th className="num">价格</th></tr>
+                    <tr><th>决策日</th><th>成交日</th><th>代码</th><th>方向</th><th className="num">数量</th><th className="num">价格</th></tr>
                   </thead>
                   <tbody>
                     {data.trades.slice(-20).reverse().map((t, i) => (
                       <tr key={i}>
-                        <td>{t.date}</td>
+                        <td>{t.decisionDate ?? t.date}</td>
+                        <td>{t.tradeDate ?? t.date}</td>
                         <td className="mono">{t.symbol}</td>
-                        <td><span className={`badge ${t.side}`}>{t.side}</span></td>
+                        <td><span className={`badge ${t.side}`}>{sideLabel(t.side)}</span></td>
                         <td className="num">{t.shares}</td>
                         <td className="num">{t.price.toFixed(2)}</td>
                       </tr>

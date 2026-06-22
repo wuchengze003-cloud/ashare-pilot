@@ -185,6 +185,8 @@ export function listBacktestResults(limit = 20): StoredBacktestSummary[] {
       maxDrawdownPct: row.max_drawdown_pct,
       sharpe: row.sharpe,
       trades: row.trades,
+      winRatePct: 0,
+      turnoverPct: 0,
     },
   }));
 }

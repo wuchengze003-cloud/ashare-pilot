@@ -68,7 +68,13 @@ export interface Analyst {
   buy_ratio?: number | null;
   consensus_eps_next?: number | null;
   implied_target?: number | null;
+  target_price_source?: string | null;
+  target_price_method?: string | null;
+  target_price_confidence?: number | null;
+  target_horizon_days?: number | null;
   current_price?: number | null;
+  current_price_source?: string | null;
+  current_price_as_of?: string | null;
   upside_pct?: number | null;
 }
 
@@ -83,7 +89,7 @@ export function fetchAnalysts(symbols: string[]) {
 }
 
 export function fetchSpot(symbol: string) {
-  return get<{ symbol: string; name: string; price: number; change_pct: number }>(
+  return get<Spot>(
     "/spot",
     { symbol },
   );
@@ -96,6 +102,8 @@ export interface Spot {
   change_pct: number;
   volume?: number;
   turnover?: number;
+  source?: string;
+  as_of?: string;
 }
 
 export function fetchSpots(symbols: string[]) {

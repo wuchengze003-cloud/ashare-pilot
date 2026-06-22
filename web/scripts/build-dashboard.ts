@@ -1,35 +1,69 @@
-// Build the dashboard backtest data file using cached data-source CSVs.
+// Build ignored runtime dashboard snapshots.
 //
-// Data fetching is done by the agent via the kimi-datasource MCP plugin because
-// the plugin is only available in the agent runtime. The fetched CSVs should be
-// placed in:
-//   web/.cache/datasource/prices/      (one CSV per batch from get_price)
-//   web/.cache/datasource/financials/  (growth + profitability CSVs)
-//
-// Then run:
-//   cd web && npx tsx scripts/build-dashboard.ts
+// Daily entry:
+//   cd web && npm run dashboard:update
 //
 // Env overrides:
-//   DASHBOARD_START=2024-01-01  DASHBOARD_END=2026-06-12
-//   DASHBOARD_REBALANCE=30      DASHBOARD_MAX_POSITIONS=6
-//   DASHBOARD_MIN_HOLD_BARS=45  DASHBOARD_REBALANCE_THRESHOLD_PCT=5
+//   DASHBOARD_START=2026-02-24  DASHBOARD_END=2026-06-12
+//   DASHBOARD_DECISION_EVERY=1  DASHBOARD_MAX_POSITIONS=5
+//   DASHBOARD_MIN_HOLD_BARS=5   DASHBOARD_REBALANCE_THRESHOLD_PCT=5
 //   DASHBOARD_CACHE=.cache/datasource
 import fs from "node:fs";
 import path from "node:path";
 import { loadEntries } from "../lib/universe";
 import { runBacktest, type BacktestConfig, type BacktestResult } from "../lib/backtest";
 import { ruleBasedScorer } from "../lib/dashboardBacktest";
-import { buildSymbolSeries, type PriceRow } from "../lib/dashboardData";
+import { optimizeBacktest, type OptimizationResult } from "../lib/backtestOptimization";
+import { buildLatestPlan, type LatestPlan } from "../lib/latestPlan";
+import { writeRuntimeJson } from "../lib/runtimeData";
+import {
+  buildSymbolSeries,
+  buildSymbolSeriesFromPyserverCache,
+  type PriceRow,
+} from "../lib/dashboardData";
 
-const today = new Date().toISOString().slice(0, 10);
-const startDate = process.env.DASHBOARD_START ?? "2024-01-01";
-const endDate = process.env.DASHBOARD_END ?? today;
-const rebalanceEveryNDays = Number(process.env.DASHBOARD_REBALANCE ?? 30);
-const maxPositions = Number(process.env.DASHBOARD_MAX_POSITIONS ?? 6);
-const minHoldBars = Number(process.env.DASHBOARD_MIN_HOLD_BARS ?? 45);
+function shanghaiNowParts() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(new Date());
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
+  return {
+    date: `${get("year")}-${get("month")}-${get("day")}`,
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+  };
+}
+
+function beforeShanghaiClose(): boolean {
+  const now = shanghaiNowParts();
+  return now.hour < 15 || (now.hour === 15 && now.minute < 30);
+}
+
+function latestAvailableDate(dates: string[], requestedEndDate: string): string {
+  const today = shanghaiNowParts().date;
+  const filtered = dates
+    .filter((d) => d <= requestedEndDate)
+    .filter((d) => (beforeShanghaiClose() ? d < today : true))
+    .sort();
+  return filtered.at(-1) ?? requestedEndDate;
+}
+
+const today = shanghaiNowParts().date;
+const explicitEndDate = Boolean(process.env.DASHBOARD_END);
+const startDate = process.env.DASHBOARD_START ?? "2026-02-24";
+const requestedEndDate = process.env.DASHBOARD_END ?? today;
+const decisionEveryNDays = Number(process.env.DASHBOARD_DECISION_EVERY ?? process.env.DASHBOARD_REBALANCE ?? 1);
+const maxPositions = Number(process.env.DASHBOARD_MAX_POSITIONS ?? 5);
+const minHoldBars = Number(process.env.DASHBOARD_MIN_HOLD_BARS ?? 5);
 const rebalanceThresholdPct = Number(process.env.DASHBOARD_REBALANCE_THRESHOLD_PCT ?? 5);
 const cacheDir = path.resolve(process.cwd(), process.env.DASHBOARD_CACHE ?? ".cache/datasource");
-const outFile = path.resolve(process.cwd(), "data", "dashboard-backtest.json");
+const pyserverCacheDb = path.resolve(process.cwd(), process.env.PYSERVER_CACHE_DB ?? "../pyserver/cache.db");
 
 interface DashboardOutput {
   generated_at: string;
@@ -47,8 +81,15 @@ interface DashboardOutput {
     avgWeightPct: number;
   }>;
   signalsByDate: BacktestResult["signalsByDate"];
+  latestPlan: LatestPlan;
   latestHoldings: BacktestResult["equityCurve"][number]["positions"];
   latestDate: string;
+  meetsSharpeTarget?: boolean;
+  primaryWindow?: string;
+  validationStats?: OptimizationResult["validationStats"];
+  optimizedParams?: OptimizationResult["optimizedParams"];
+  optimizationWarnings?: string[];
+  optimizationCandidates?: OptimizationResult["candidates"];
 }
 
 function computeBenchmarkCurve(benchmark: PriceRow[], cfg: BacktestConfig) {
@@ -137,28 +178,29 @@ function computeThemePerformance(
 }
 
 async function main() {
-  if (!fs.existsSync(cacheDir)) {
-    console.error(`Cache directory not found: ${cacheDir}`);
-    console.error(
-      "Please fetch data-source CSVs first. See AGENTS.md for the dashboard data-fetching steps.",
-    );
-    process.exit(1);
-  }
-
   const universe = loadEntries();
   console.log(`Loaded ${universe.length} universe entries`);
 
-  const { series, benchmark } = buildSymbolSeries(universe, cacheDir);
-  console.log(`Built ${series.length} price series, benchmark ${benchmark.length} bars`);
+  const source = fs.existsSync(cacheDir)
+    ? `data-source CSVs at ${cacheDir}`
+    : `pyserver SQLite cache at ${pyserverCacheDb}`;
+  const { series, benchmark } = fs.existsSync(cacheDir)
+    ? buildSymbolSeries(universe, cacheDir)
+    : buildSymbolSeriesFromPyserverCache(universe, pyserverCacheDb);
+  console.log(`Built ${series.length} price series, benchmark ${benchmark.length} bars from ${source}`);
 
   if (series.length === 0) {
-    console.error("No usable price series found. Check cached CSVs in", cacheDir);
+    console.error("No usable price series found. Check cached CSVs or pyserver cache.");
     process.exit(1);
   }
+  const allDates = [...new Set(series.flatMap((s) => s.klines.map((k) => k.date)))].sort();
+  const endDate = explicitEndDate ? requestedEndDate : latestAvailableDate(allDates, requestedEndDate);
 
   const cfg: BacktestConfig = {
     startCash: 1_000_000,
-    rebalanceEveryNDays,
+    rebalanceEveryNDays: decisionEveryNDays,
+    decisionEveryNDays,
+    executionPrice: "next_open",
     startDate,
     endDate,
     feeBps: 10,
@@ -166,28 +208,70 @@ async function main() {
     autoSellUnselected: true,
     minHoldBars,
     rebalanceThresholdPct,
+    sharpeTarget: 3,
+    optimizationWindow: "post_cny_2026",
   };
 
-  const result = await runBacktest(series, cfg, { scorer: ruleBasedScorer() });
-  const benchmarkCurve = computeBenchmarkCurve(benchmark, cfg);
+  const optimized = process.env.DASHBOARD_SKIP_OPTIMIZE
+    ? {
+      result: await runBacktest(series, cfg, { scorer: ruleBasedScorer() }),
+      optimization: null,
+    }
+    : await optimizeBacktest(series, cfg);
+  const result = optimized.result;
+  const benchmarkCurve = computeBenchmarkCurve(benchmark, result.config);
 
   const lastBar = result.equityCurve[result.equityCurve.length - 1];
+  const minScoreToBuy = optimized.optimization?.optimizedParams.minScoreToBuy;
+  const latestPlan = await buildLatestPlan(series, {
+    decisionDate: lastBar.date,
+    scorer: minScoreToBuy == null
+      ? ruleBasedScorer()
+      : ruleBasedScorer({ minScoreToBuy }),
+    maxPositions: result.config.maxPositions,
+    minScoreToBuy,
+  });
   const output: DashboardOutput = {
     generated_at: new Date().toISOString(),
-    config: cfg,
+    config: result.config,
     stats: result.stats,
     equityCurve: result.equityCurve,
     benchmarkCurve,
     trades: result.trades,
     themePerformance: computeThemePerformance(result, series),
     signalsByDate: result.signalsByDate,
+    latestPlan,
     latestHoldings: lastBar.positions,
     latestDate: lastBar.date,
+    meetsSharpeTarget: result.stats.sharpe >= (result.config.sharpeTarget ?? 3),
+    primaryWindow: "post_cny_2026",
+    validationStats: optimized.optimization?.validationStats,
+    optimizedParams: optimized.optimization?.optimizedParams,
+    optimizationWarnings: optimized.optimization?.warnings ?? [],
+    optimizationCandidates: optimized.optimization?.candidates ?? [],
   };
 
-  fs.mkdirSync(path.dirname(outFile), { recursive: true });
-  fs.writeFileSync(outFile, JSON.stringify(output, null, 2) + "\n", "utf-8");
-  console.log(`Wrote dashboard backtest to ${outFile}`);
+  writeRuntimeJson("backtest.json", output);
+  writeRuntimeJson("signals.json", {
+    generated_at: new Date().toISOString(),
+    source: latestPlan.source,
+    score_model: latestPlan.scoreModel,
+    signal_date: latestPlan.decisionDate,
+    signal_basis: "latest-complete-close",
+    max_positions: latestPlan.maxPositions,
+    optimized_params: optimized.optimization?.optimizedParams,
+    fundamentals: [],
+    signals: latestPlan.signals,
+  });
+  writeRuntimeJson("meta.json", {
+    generated_at: new Date().toISOString(),
+    universe_count: universe.length,
+  });
+  console.log("Wrote runtime backtest/signals/meta to web/data/runtime");
+  console.log(
+    `Latest plan: ${latestPlan.decisionDate} close -> next open, ` +
+      `${latestPlan.signals.filter((s) => s.action === "buy").length} buys`,
+  );
   console.log(
     `Return: ${result.stats.totalReturnPct.toFixed(2)}%  ` +
       `CAGR: ${result.stats.cagrPct.toFixed(2)}%  ` +

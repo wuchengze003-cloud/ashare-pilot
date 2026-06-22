@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
         buy_ratio: null,
         consensus_eps_next: null,
         implied_target: null,
+        target_price_source: null,
         upside_pct: null,
       });
     } catch {

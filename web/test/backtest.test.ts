@@ -126,16 +126,16 @@ test("skips buying a stock locked at 涨停 (limit-up)", async () => {
   const series: SymbolSeries[] = [
     { entry: { symbol: "600000", name: "X", theme: "T" }, klines: flatWithJump("2025-01-01", N, 5, 11.5) },
   ];
-  // Only signal a BUY on the limit-up day.
+  // Signal after bar 4 close; execution at bar 5 open is locked limit-up.
   const buyOnLimitUp: Scorer = async (snaps, { asOf }) =>
     snaps.map((s) => ({
       symbol: s.symbol,
-      action: asOf === dates[5] ? "buy" : "hold",
+      action: asOf === dates[4] ? "buy" : "hold",
       confidence: 1,
-      size: asOf === dates[5] ? 1 : 0,
+      size: asOf === dates[4] ? 1 : 0,
       rationale: "t",
     }));
-  const r = await runBacktest(series, cfg, { scorer: buyOnLimitUp });
+  const r = await runBacktest(series, { ...cfg, rebalanceEveryNDays: 1, decisionEveryNDays: 1 }, { scorer: buyOnLimitUp });
   assert.equal(r.trades.filter((t) => t.side === "buy").length, 0, "must not buy into 涨停");
 });
 
@@ -147,15 +147,39 @@ test("buys when the same-day move stays below the limit", async () => {
   const buyOnBar5: Scorer = async (snaps, { asOf }) =>
     snaps.map((s) => ({
       symbol: s.symbol,
-      action: asOf === dates[5] ? "buy" : "hold",
+      action: asOf === dates[4] ? "buy" : "hold",
       confidence: 1,
-      size: asOf === dates[5] ? 1 : 0,
+      size: asOf === dates[4] ? 1 : 0,
       rationale: "t",
     }));
-  const r = await runBacktest(series, cfg, { scorer: buyOnBar5 });
+  const r = await runBacktest(series, { ...cfg, rebalanceEveryNDays: 1, decisionEveryNDays: 1 }, { scorer: buyOnBar5 });
   const buys = r.trades.filter((t) => t.side === "buy");
   assert.equal(buys.length, 1, "a sub-limit move is buyable");
   assert.equal(buys[0].date, dates[5]);
+  assert.equal(buys[0].decisionDate, dates[4]);
+  assert.equal(buys[0].priceField, "open");
+});
+
+test("executes a close-after-decision at the next open price", async () => {
+  const rows = makeKlines("2025-01-01", Array.from({ length: N }, () => 10));
+  rows[5] = { ...rows[5], open: 10.8, close: 10.2 };
+  const series: SymbolSeries[] = [
+    { entry: { symbol: "600000", name: "X", theme: "T" }, klines: rows },
+  ];
+  const buyAfterBar4: Scorer = async (snaps, { asOf }) =>
+    snaps.map((s) => ({
+      symbol: s.symbol,
+      action: asOf === dates[4] ? "buy" : "hold",
+      confidence: 1,
+      size: asOf === dates[4] ? 1 : 0,
+      rationale: "t",
+    }));
+  const r = await runBacktest(series, { ...cfg, rebalanceEveryNDays: 1, decisionEveryNDays: 1 }, { scorer: buyAfterBar4 });
+  const [buy] = r.trades.filter((t) => t.side === "buy");
+  assert.equal(buy.decisionDate, dates[4]);
+  assert.equal(buy.tradeDate, dates[5]);
+  assert.equal(buy.price, 10.8);
+  assert.equal(r.equityCurve.find((b) => b.date === dates[5])?.positions["600000"].price, 10.2);
 });
 
 // Prepend 5 flat bars before the window so the first rebalance date has
@@ -246,7 +270,7 @@ test("a suspended (停牌) symbol defers sells and marks at last close without w
   assert.equal(during.equity, 1_000_000, "suspended position marks at last traded close");
 });
 
-test("signals see closes strictly before the rebalance date and no fundamentals", async () => {
+test("signals see decision-day close, never the next execution bar, and no future fundamentals", async () => {
   // Window closes are 100, 101, 102, … so the last visible close reveals
   // exactly how many bars the snapshot included.
   const closes = Array.from({ length: N }, (_, i) => 100 + i);
@@ -261,10 +285,10 @@ test("signals see closes strictly before the rebalance date and no fundamentals"
     return [];
   };
   await runBacktest(series, cfg, { scorer: capture });
-  // At rebalance date dates[5], the latest visible close is bar 4's (= 104),
-  // not bar 5's (= 105): the decision precedes the execution price.
-  assert.equal(seen.get(dates[5])!.lastClose, 104);
-  assert.equal(seen.get(dates[10])!.lastClose, 109);
+  // At decision date dates[5], the latest visible close is bar 5's (= 105),
+  // not bar 6's (= 106): the decision is after D close and before D+1 open.
+  assert.equal(seen.get(dates[5])!.lastClose, 105);
+  assert.equal(seen.get(dates[10])!.lastClose, 110);
   assert.equal(seen.get(dates[5])!.fundamental, undefined, "backtests must not see today's fundamentals");
 });
 
@@ -327,6 +351,26 @@ test("minHoldBars defers sells until the holding period is met", async () => {
   const soldDate = new Date(firstSell.date);
   const barsDiff = (soldDate.getTime() - boughtDate.getTime()) / (24 * 3600 * 1000);
   assert.ok(barsDiff >= 10, `expected A held at least 10 bars, got ${barsDiff}`);
+});
+
+test("hard sell signals bypass minHoldBars", async () => {
+  const series: SymbolSeries[] = [
+    { entry: { symbol: "600000", name: "X", theme: "T" }, klines: padded(Array.from({ length: N }, () => 10)) },
+  ];
+  const altCfg: BacktestConfig = { ...cfg, rebalanceEveryNDays: 1, decisionEveryNDays: 1, minHoldBars: 10, autoSellUnselected: true };
+  const buyThenHardSell: Scorer = async (snaps, { asOf }) =>
+    snaps.map((s) => ({
+      symbol: s.symbol,
+      action: asOf === dates[0] ? "buy" : asOf === dates[1] ? "sell" : "hold",
+      confidence: 1,
+      size: asOf === dates[0] ? 1 : 0,
+      rationale: asOf === dates[1] ? "趋势破坏" : "t",
+    }));
+  const r = await runBacktest(series, altCfg, { scorer: buyThenHardSell });
+  const sell = r.trades.find((t) => t.side === "sell");
+  assert.ok(sell, "expected hard sell to execute despite minHoldBars");
+  assert.equal(sell.decisionDate, dates[1]);
+  assert.equal(sell.tradeDate, dates[2]);
 });
 
 test("rebalanceThresholdPct skips trades when current weight is close to target", async () => {

@@ -1,7 +1,10 @@
-// DeepSeek-driven universe refresh.
+// DeepSeek-driven backend universe refresh.
 //
 // Asks the model to act as a sector curator: given the current watchlist
-// and the 硅基文明消费 thesis, propose ADDS / REMOVES / RECLASSIFIES.
+// and the 硅基文明消费 thesis plus optional research inputs, propose
+// ADDS / REMOVES / RECLASSIFIES. This is intentionally a backend workflow:
+// the public frontend displays the latest approved 94-stock snapshot and does
+// not expose a button that mutates the universe.
 // Every proposed symbol is validated against pyserver before being written
 // (DeepSeek will otherwise hallucinate codes that don't trade).
 import { chat } from "./deepseek";
@@ -27,6 +30,11 @@ export interface RefreshResult {
   finalCount: number;
 }
 
+export interface RefreshContext {
+  researchNotes?: string[];
+  sourceLabels?: string[];
+}
+
 const CURATOR_SYSTEM = `你是中国 A 股的硅基文明消费股研究员。
 
 主题：硅基文明（AI 算力体）自身为了存在与扩张需要"消费"的东西 ——
@@ -34,7 +42,7 @@ const CURATOR_SYSTEM = `你是中国 A 股的硅基文明消费股研究员。
 电力设备（变压器/HVDC/UPS/服务器电源/开关柜等 AIDC 供电设备）、
 电力(绿电+核电)、IDC、HBM/存储、半导体设备与材料、高速 PCB/CCL、晶圆代工、云。
 
-任务：审阅当前股票池，发现遗漏的子主题与未覆盖的龙头，识别需要剔除的标的或重新分类的标的。
+任务：审阅当前股票池和后端提供的研究输入，发现遗漏的子主题与未覆盖的龙头，识别需要剔除的标的或重新分类的标的。
 
 要求：
 - 添加项必须是 A 股真实上市公司，给出 6 位股票代码、中文简称、所属子主题、一句话说明。
@@ -47,6 +55,7 @@ const CURATOR_SYSTEM = `你是中国 A 股的硅基文明消费股研究员。
   电力设备 = 设备/系统级（变压器、HVDC、UPS、服务器电源、开关柜）。
 - 不要包含 ST、暂停上市、纯人类消费品（白酒/食品/服饰）。
 - 子主题命名沿用当前列表（算力/AI芯片、光模块、AI服务器、液冷、电力、电力设备、IDC、功率器件、存储/HBM、半导体设备、半导体材料、AI-PCB、晶圆代工、云/AI基建）。
+- 不按固定日期机械调整；只有当后端输入的新研报、公告、产业链线索或估值/交易数据足以改变覆盖结论时才提出变更。
 
 严格输出 JSON：
 {
@@ -57,7 +66,10 @@ const CURATOR_SYSTEM = `你是中国 A 股的硅基文明消费股研究员。
 }
 不要输出其他文本。`;
 
-export async function proposeRefresh(current: UniverseFile): Promise<RefreshProposal> {
+export async function proposeRefresh(
+  current: UniverseFile,
+  context: RefreshContext = {},
+): Promise<RefreshProposal> {
   const userPayload = {
     current_entries: current.entries.map((e) => ({
       symbol: e.symbol,
@@ -65,6 +77,8 @@ export async function proposeRefresh(current: UniverseFile): Promise<RefreshProp
       theme: e.theme,
     })),
     distinct_themes: [...new Set(current.entries.map((e) => e.theme))],
+    research_inputs: context.researchNotes ?? [],
+    source_labels: context.sourceLabels ?? [],
   };
   const raw = await chat(
     [
@@ -168,7 +182,7 @@ export async function applyRefresh(
   const next: UniverseFile = {
     ...current,
     updated_at: new Date().toISOString().slice(0, 10),
-    updated_by: "deepseek-refresh",
+    updated_by: "backend-research-refresh",
     entries: newEntries,
   };
   writeUniverse(next);
@@ -181,9 +195,12 @@ export async function applyRefresh(
 }
 
 export async function refreshUniverse(
-  opts: { onValidate?: (symbol: string, ok: boolean) => void } = {},
+  opts: {
+    onValidate?: (symbol: string, ok: boolean) => void;
+    context?: RefreshContext;
+  } = {},
 ): Promise<RefreshResult> {
   const current = readUniverse();
-  const proposal = await proposeRefresh(current);
+  const proposal = await proposeRefresh(current, opts.context);
   return applyRefresh(current, proposal, opts);
 }

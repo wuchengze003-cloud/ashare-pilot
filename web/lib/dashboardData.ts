@@ -6,6 +6,7 @@
 // SymbolSeries structure expected by lib/backtest.ts.
 import fs from "node:fs";
 import path from "node:path";
+import Database from "better-sqlite3";
 import type { Kline } from "./pyserver";
 import type { FundamentalSnapshot, SymbolSeries } from "./backtest";
 import type { UniverseEntry } from "./universe";
@@ -260,4 +261,56 @@ export function buildSymbolSeries(
 
   const benchmark = priceMap.get("000300") ?? [];
   return { series, benchmark };
+}
+
+/** Build SymbolSeries from pyserver's SQLite kline cache when CSV caches are unavailable. */
+export function buildSymbolSeriesFromPyserverCache(
+  entries: UniverseEntry[],
+  dbPath: string,
+): { series: SymbolSeries[]; benchmark: PriceRow[] } {
+  if (!fs.existsSync(dbPath)) return { series: [], benchmark: [] };
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const latestKline = db.prepare(
+      "SELECT payload FROM cache WHERE key LIKE ? ORDER BY fetched_at DESC LIMIT 1",
+    );
+    const loadRows = (symbol: string): PriceRow[] => {
+      const row = latestKline.get(`kline:${symbol}:%:qfq`) as { payload: string } | undefined;
+      if (!row) return [];
+      return (JSON.parse(row.payload) as Array<{
+        date: string;
+        open: number;
+        high: number;
+        low: number;
+        close: number;
+        volume: number;
+      }>).map((r) => ({
+        date: r.date,
+        open: r.open,
+        high: r.high,
+        low: r.low,
+        close: r.close,
+        volume: r.volume,
+        ticker: toDataSourceTicker(symbol),
+      }));
+    };
+
+    const series: SymbolSeries[] = [];
+    for (const entry of entries) {
+      const rows = loadRows(entry.symbol);
+      if (rows.length < 30) continue;
+      const klines: Kline[] = rows.map((r) => ({
+        date: r.date,
+        open: r.open,
+        high: r.high,
+        low: r.low,
+        close: r.close,
+        volume: r.volume,
+      }));
+      series.push({ entry, klines });
+    }
+    return { series, benchmark: loadRows("000300") };
+  } finally {
+    db.close();
+  }
 }

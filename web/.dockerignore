@@ -1,0 +1,7 @@
+.cache/
+.next/
+.env*
+node_modules/
+tsconfig.tsbuildinfo
+npm-debug.log*
+Dockerfile

@@ -7,7 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --test --import tsx test/*.test.ts"
+    "test": "node --test --import tsx test/*.test.ts",
+    "dashboard:build": "tsx scripts/build-dashboard.ts",
+    "dashboard:update": "tsx scripts/update-quant-dashboard.ts",
+    "deploy:server": "tsx scripts/deploy-a-share-server.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",

@@ -23,11 +23,18 @@ export async function POST(req: NextRequest) {
 
   const cfg: BacktestConfig = {
     startCash: body.startCash ?? 1_000_000,
-    rebalanceEveryNDays: body.rebalanceEveryNDays ?? 10,
+    rebalanceEveryNDays: body.decisionEveryNDays ?? body.rebalanceEveryNDays ?? 1,
+    decisionEveryNDays: body.decisionEveryNDays ?? body.rebalanceEveryNDays ?? 1,
+    executionPrice: "next_open",
     startDate: body.startDate,
     endDate: body.endDate,
     feeBps: body.feeBps ?? 10,
-    maxPositions: body.maxPositions ?? 6,
+    maxPositions: body.maxPositions ?? 5,
+    autoSellUnselected: body.autoSellUnselected ?? true,
+    minHoldBars: body.minHoldBars ?? 5,
+    rebalanceThresholdPct: body.rebalanceThresholdPct ?? 5,
+    sharpeTarget: body.sharpeTarget ?? 3,
+    optimizationWindow: body.optimizationWindow ?? "post_cny_2026",
   };
 
   const padStart = new Date(cfg.startDate);

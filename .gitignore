@@ -14,4 +14,7 @@ __pycache__/
 .DS_Store
 pyserver/cache.db*
 web/.cache/
+web/data/dashboard-backtest.json
+web/data/runtime/*.json
+!web/data/runtime/.gitkeep
 /.claude/
