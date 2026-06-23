@@ -73,6 +73,8 @@ export default function DashboardPage() {
   const holdingsValue = holdings.reduce((sum, item) => sum + item.value, 0);
   const latestCash = latestBar?.cash ?? 0;
   const latestEquity = latestBar?.equity ?? holdingsValue + latestCash;
+  const snapshotLabel = data?.snapshot_label ?? "完整收盘";
+  const decisionBasisLabel = data?.snapshot_basis === "intraday-midday" ? "午盘快照决策" : "收盘决策";
 
   return (
     <div className="container">
@@ -83,7 +85,7 @@ export default function DashboardPage() {
           <h1>策略 Dashboard</h1>
           <p>
             基于项目股票池的可复现规则回测；当前生成脚本默认使用右侧价格-主题-量能规则。
-            数据来自本地行情侧车缓存，信号按每日收盘决策、次日开盘成交口径生成。
+            数据来自本地行情侧车缓存，信号按当前运行快照生成。
           </p>
         </div>
       </header>
@@ -119,7 +121,9 @@ export default function DashboardPage() {
           <div className="row" style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
             <span>回测区间 {data.config.startDate} → {data.config.endDate}</span>
             <span>·</span>
-            <span>{decisionCadenceLabel}收盘决策，次日开盘成交</span>
+            <span>{decisionCadenceLabel}{decisionBasisLabel}，次日开盘成交</span>
+            <span>·</span>
+            <span>{snapshotLabel}</span>
             <span>·</span>
             <span>最大持仓 {data.config.maxPositions} 只</span>
             <span>·</span>

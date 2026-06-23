@@ -10,6 +10,7 @@
 //   PYSERVER_URL=http://localhost:8001
 //   DASHBOARD_START=2026-02-24
 //   DASHBOARD_END=2026-06-22
+//   DASHBOARD_INTRADAY=1       # explicitly mark today's pre-close data as a midday snapshot
 //   UPDATE_QUANT_CONCURRENCY=3
 import fs from "node:fs";
 import path from "node:path";

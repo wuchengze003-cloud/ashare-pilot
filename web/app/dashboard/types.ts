@@ -1,5 +1,7 @@
 export interface DashboardData {
   generated_at: string;
+  snapshot_basis?: "latest-complete-close" | "intraday-midday";
+  snapshot_label?: string;
   config: {
     startCash: number;
     rebalanceEveryNDays: number;

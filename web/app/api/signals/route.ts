@@ -30,7 +30,11 @@ interface StaticSignalsSnapshot {
   score_model?: string;
   signal_date?: string;
   signal_basis?: string;
+  snapshot_label?: string;
   max_positions?: number;
+  universe_count?: number;
+  scored_count?: number;
+  skipped_count?: number;
   optimized_params?: OptimizedParams;
   signals?: Array<{
     symbol: string;
@@ -115,8 +119,42 @@ function fallbackSignalsResponse(reason: string, maxPositions: number) {
     fallback_reason: reason,
     signal_date: snapshot.signal_date ?? null,
     signal_basis: snapshot.signal_basis ?? "cached-snapshot",
+    snapshot_label: snapshot.snapshot_label ?? null,
     max_positions: effectiveMaxPositions,
     optimized_params: snapshot.optimized_params ?? null,
+    universe_count: snapshot.universe_count ?? null,
+    scored_count: snapshot.scored_count ?? null,
+    skipped_count: snapshot.skipped_count ?? null,
+    counts: signalCounts(signals),
+    gross_buy_weight: Number(
+      signals
+        .filter((s) => s.action === "buy")
+        .reduce((sum, s) => sum + s.size, 0)
+        .toFixed(4),
+    ),
+    signals,
+  });
+}
+
+function runtimeSignalsResponse(snapshot: StaticSignalsSnapshot, maxPositions: number) {
+  const effectiveMaxPositions = snapshot.max_positions ?? maxPositions;
+  const signals = toExecutableSignals(snapshot.signals ?? [], {
+    maxPositions: effectiveMaxPositions,
+  });
+  return NextResponse.json({
+    generated_at: new Date().toISOString(),
+    source: "runtime-snapshot",
+    snapshot_source: snapshot.source ?? null,
+    score_model: snapshot.score_model ?? "dashboard-rule",
+    stale: false,
+    signal_date: snapshot.signal_date ?? null,
+    signal_basis: snapshot.signal_basis ?? "cached-snapshot",
+    snapshot_label: snapshot.snapshot_label ?? null,
+    max_positions: effectiveMaxPositions,
+    optimized_params: snapshot.optimized_params ?? null,
+    universe_count: snapshot.universe_count ?? null,
+    scored_count: snapshot.scored_count ?? null,
+    skipped_count: snapshot.skipped_count ?? null,
     counts: signalCounts(signals),
     gross_buy_weight: Number(
       signals
@@ -149,6 +187,16 @@ export async function GET(req: NextRequest) {
     1,
   );
   const asOf = req.nextUrl.searchParams.get("asOf") ?? new Date().toISOString().slice(0, 10);
+  const runtimeSnapshot = loadStaticSignalsSnapshot();
+  if (
+    req.nextUrl.searchParams.get("forceLive") !== "1" &&
+    runtimeSnapshot?.signals?.length &&
+    runtimeSnapshot.signal_date === asOf &&
+    runtimeSnapshot.signal_basis === "intraday-midday"
+  ) {
+    return runtimeSignalsResponse(runtimeSnapshot, maxPositions);
+  }
+
   const start = new Date(asOf);
   start.setDate(start.getDate() - lookbackDays);
   const startDate = yyyymmdd(start);

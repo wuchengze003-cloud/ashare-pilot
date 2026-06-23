@@ -58,6 +58,11 @@ const today = shanghaiNowParts().date;
 const explicitEndDate = Boolean(process.env.DASHBOARD_END);
 const startDate = process.env.DASHBOARD_START ?? "2026-02-24";
 const requestedEndDate = process.env.DASHBOARD_END ?? today;
+const isIntradaySnapshot =
+  process.env.DASHBOARD_INTRADAY === "1" ||
+  (explicitEndDate && requestedEndDate === today && beforeShanghaiClose());
+const snapshotBasis = isIntradaySnapshot ? "intraday-midday" : "latest-complete-close";
+const snapshotLabel = isIntradaySnapshot ? "午盘快照" : "完整收盘";
 const decisionEveryNDays = Number(process.env.DASHBOARD_DECISION_EVERY ?? process.env.DASHBOARD_REBALANCE ?? 1);
 const maxPositions = Number(process.env.DASHBOARD_MAX_POSITIONS ?? 5);
 const minHoldBars = Number(process.env.DASHBOARD_MIN_HOLD_BARS ?? 5);
@@ -67,6 +72,8 @@ const pyserverCacheDb = path.resolve(process.cwd(), process.env.PYSERVER_CACHE_D
 
 interface DashboardOutput {
   generated_at: string;
+  snapshot_basis?: "latest-complete-close" | "intraday-midday";
+  snapshot_label?: string;
   config: BacktestConfig;
   stats: BacktestResult["stats"];
   equityCurve: BacktestResult["equityCurve"];
@@ -233,6 +240,8 @@ async function main() {
   });
   const output: DashboardOutput = {
     generated_at: new Date().toISOString(),
+    snapshot_basis: snapshotBasis,
+    snapshot_label: snapshotLabel,
     config: result.config,
     stats: result.stats,
     equityCurve: result.equityCurve,
@@ -257,9 +266,13 @@ async function main() {
     source: latestPlan.source,
     score_model: latestPlan.scoreModel,
     signal_date: latestPlan.decisionDate,
-    signal_basis: "latest-complete-close",
+    signal_basis: snapshotBasis,
+    snapshot_label: snapshotLabel,
     max_positions: latestPlan.maxPositions,
     optimized_params: optimized.optimization?.optimizedParams,
+    universe_count: universe.length,
+    scored_count: latestPlan.signals.length,
+    skipped_count: Math.max(0, universe.length - latestPlan.signals.length),
     fundamentals: [],
     signals: latestPlan.signals,
   });
@@ -269,7 +282,7 @@ async function main() {
   });
   console.log("Wrote runtime backtest/signals/meta to web/data/runtime");
   console.log(
-    `Latest plan: ${latestPlan.decisionDate} close -> next open, ` +
+    `Latest plan: ${latestPlan.decisionDate} ${snapshotLabel} -> next open, ` +
       `${latestPlan.signals.filter((s) => s.action === "buy").length} buys`,
   );
   console.log(
