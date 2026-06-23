@@ -170,6 +170,8 @@ function generatedLine(
     ? `实时信号：${signalSnapshot.signal_date} · 行情截至：${shortAsOf(signalSnapshot.spot_as_of_max)}`
     : signalSnapshot.signal_basis === "intraday-midday"
       ? `午盘快照：${signalSnapshot.signal_date}`
+    : signalSnapshot.signal_basis === "latest-complete-close"
+      ? `完整收盘：${signalSnapshot.signal_date}`
     : `信号日期：${signalSnapshot.signal_date}`;
   return `${signalBasis} · 回测截至：${marketDate} · 快照生成：${generated} UTC · 股票池更新：${universe.updated_at}`;
 }
