@@ -5,6 +5,7 @@
 //
 // Env overrides:
 //   DASHBOARD_START=2026-02-24  DASHBOARD_END=2026-06-12
+//   DASHBOARD_INTRADAY=1        # explicitly mark a pre-close run as intraday
 //   DASHBOARD_DECISION_EVERY=1  DASHBOARD_MAX_POSITIONS=5
 //   DASHBOARD_MIN_HOLD_BARS=5   DASHBOARD_REBALANCE_THRESHOLD_PCT=5
 //   DASHBOARD_CACHE=.cache/datasource
@@ -42,7 +43,7 @@ function shanghaiNowParts() {
 
 function beforeShanghaiClose(): boolean {
   const now = shanghaiNowParts();
-  return now.hour < 15 || (now.hour === 15 && now.minute < 30);
+  return now.hour < 15;
 }
 
 function latestAvailableDate(dates: string[], requestedEndDate: string): string {
@@ -58,9 +59,10 @@ const today = shanghaiNowParts().date;
 const explicitEndDate = Boolean(process.env.DASHBOARD_END);
 const startDate = process.env.DASHBOARD_START ?? "2026-02-24";
 const requestedEndDate = process.env.DASHBOARD_END ?? today;
+const intradayOverride = process.env.DASHBOARD_INTRADAY;
 const isIntradaySnapshot =
-  process.env.DASHBOARD_INTRADAY === "1" ||
-  (explicitEndDate && requestedEndDate === today && beforeShanghaiClose());
+  intradayOverride === "1" ||
+  (intradayOverride !== "0" && explicitEndDate && requestedEndDate === today && beforeShanghaiClose());
 const snapshotBasis = isIntradaySnapshot ? "intraday-midday" : "latest-complete-close";
 const snapshotLabel = isIntradaySnapshot ? "午盘快照" : "完整收盘";
 const decisionEveryNDays = Number(process.env.DASHBOARD_DECISION_EVERY ?? process.env.DASHBOARD_REBALANCE ?? 1);
