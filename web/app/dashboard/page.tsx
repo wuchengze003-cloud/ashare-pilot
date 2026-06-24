@@ -75,6 +75,25 @@ export default function DashboardPage() {
   const latestEquity = latestBar?.equity ?? holdingsValue + latestCash;
   const snapshotLabel = data?.snapshot_label ?? "完整收盘";
   const decisionBasisLabel = data?.snapshot_basis === "intraday-midday" ? "午盘快照决策" : "收盘决策";
+  const targetBuys = data?.latestPlan?.signals.filter((s) => s.action === "buy" && s.size > 0) ?? [];
+  const targetSymbols = new Set(targetBuys.map((s) => s.symbol));
+  const plannedSells = holdings
+    .filter((h) => !targetSymbols.has(h.sym))
+    .map((h) => ({
+      symbol: h.sym,
+      side: "sell" as const,
+      label: "卖出",
+      targetWeight: 0,
+      reason: "跌出明日目标组合，次日开盘优先卖出",
+    }));
+  const plannedBuys = targetBuys.map((s) => ({
+    symbol: s.symbol,
+    side: "buy" as const,
+    label: holdings.some((h) => h.sym === s.symbol) ? "调仓" : "买入",
+    targetWeight: s.size,
+    reason: s.rationale,
+  }));
+  const plannedOrders = [...plannedSells, ...plannedBuys];
 
   return (
     <div className="container">
@@ -128,6 +147,11 @@ export default function DashboardPage() {
             <span>最大持仓 {data.config.maxPositions} 只</span>
             <span>·</span>
             <span>手续费 {data.config.feeBps} bps</span>
+            <span>·</span>
+            <span>
+              参数：最短持仓 {data.config.minHoldBars ?? "未设"} 日，换手阈值 {data.config.rebalanceThresholdPct ?? 0}%
+              {data.optimizedParams ? `，买入分数 ${data.optimizedParams.minScoreToBuy.toFixed(2)}` : ""}
+            </span>
             <span>·</span>
             <span>生成于 {new Date(data.generated_at).toLocaleString("zh-CN")}</span>
           </div>
@@ -185,6 +209,40 @@ export default function DashboardPage() {
                         <td className="num">{pos.price.toFixed(2)}</td>
                         <td className="num">{money(value)}</td>
                         <td className="num">{((value / (latestEquity || 1)) * 100).toFixed(1)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="theme-panel">
+              <div className="theme-title">
+                <strong>明日待执行</strong>
+                <span>{data.latestPlan?.decisionDate ?? data.latestDate} 决策 · 次日开盘</span>
+              </div>
+              <div className="table-wrap compact-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>代码</th>
+                      <th>名称</th>
+                      <th>方向</th>
+                      <th className="num">目标仓位</th>
+                      <th>原因</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {plannedOrders.length === 0 && (
+                      <tr><td colSpan={5} className="muted">暂无待执行换仓</td></tr>
+                    )}
+                    {plannedOrders.map((order) => (
+                      <tr key={`${order.side}-${order.symbol}`}>
+                        <td className="mono">{order.symbol}</td>
+                        <td>{nameMap.get(order.symbol) ?? "名称未收录"}</td>
+                        <td><span className={`badge ${order.side}`}>{order.label}</span></td>
+                        <td className="num">{(order.targetWeight * 100).toFixed(1)}%</td>
+                        <td className="muted signal-reason">{order.reason}</td>
                       </tr>
                     ))}
                   </tbody>
