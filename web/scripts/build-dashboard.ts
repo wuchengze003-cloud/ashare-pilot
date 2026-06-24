@@ -6,8 +6,10 @@
 // Env overrides:
 //   DASHBOARD_START=2026-02-24  DASHBOARD_END=2026-06-12
 //   DASHBOARD_INTRADAY=1        # explicitly mark a pre-close run as intraday
-//   DASHBOARD_DECISION_EVERY=1  DASHBOARD_MAX_POSITIONS=5
+//   DASHBOARD_DECISION_EVERY=1  DASHBOARD_MAX_POSITIONS=4
 //   DASHBOARD_MIN_HOLD_BARS=5   DASHBOARD_REBALANCE_THRESHOLD_PCT=5
+//   DASHBOARD_MIN_SCORE_TO_BUY=0.54
+//   DASHBOARD_OPTIMIZE=1        # diagnostic only; daily runs keep fixed params by default
 //   DASHBOARD_CACHE=.cache/datasource
 import fs from "node:fs";
 import path from "node:path";
@@ -66,9 +68,11 @@ const isIntradaySnapshot =
 const snapshotBasis = isIntradaySnapshot ? "intraday-midday" : "latest-complete-close";
 const snapshotLabel = isIntradaySnapshot ? "午盘快照" : "完整收盘";
 const decisionEveryNDays = Number(process.env.DASHBOARD_DECISION_EVERY ?? process.env.DASHBOARD_REBALANCE ?? 1);
-const maxPositions = Number(process.env.DASHBOARD_MAX_POSITIONS ?? 5);
+const maxPositions = Number(process.env.DASHBOARD_MAX_POSITIONS ?? 4);
 const minHoldBars = Number(process.env.DASHBOARD_MIN_HOLD_BARS ?? 5);
 const rebalanceThresholdPct = Number(process.env.DASHBOARD_REBALANCE_THRESHOLD_PCT ?? 5);
+const minScoreToBuy = Number(process.env.DASHBOARD_MIN_SCORE_TO_BUY ?? 0.54);
+const shouldOptimize = process.env.DASHBOARD_OPTIMIZE === "1";
 const cacheDir = path.resolve(process.cwd(), process.env.DASHBOARD_CACHE ?? ".cache/datasource");
 const pyserverCacheDb = path.resolve(process.cwd(), process.env.PYSERVER_CACHE_DB ?? "../pyserver/cache.db");
 
@@ -221,24 +225,22 @@ async function main() {
     optimizationWindow: "post_cny_2026",
   };
 
-  const optimized = process.env.DASHBOARD_SKIP_OPTIMIZE
-    ? {
-      result: await runBacktest(series, cfg, { scorer: ruleBasedScorer() }),
+  const optimized = shouldOptimize
+    ? await optimizeBacktest(series, cfg)
+    : {
+      result: await runBacktest(series, cfg, { scorer: ruleBasedScorer({ minScoreToBuy }) }),
       optimization: null,
-    }
-    : await optimizeBacktest(series, cfg);
+    };
   const result = optimized.result;
   const benchmarkCurve = computeBenchmarkCurve(benchmark, result.config);
 
   const lastBar = result.equityCurve[result.equityCurve.length - 1];
-  const minScoreToBuy = optimized.optimization?.optimizedParams.minScoreToBuy;
+  const effectiveMinScoreToBuy = optimized.optimization?.optimizedParams.minScoreToBuy ?? minScoreToBuy;
   const latestPlan = await buildLatestPlan(series, {
     decisionDate: lastBar.date,
-    scorer: minScoreToBuy == null
-      ? ruleBasedScorer()
-      : ruleBasedScorer({ minScoreToBuy }),
+    scorer: ruleBasedScorer({ minScoreToBuy: effectiveMinScoreToBuy }),
     maxPositions: result.config.maxPositions,
-    minScoreToBuy,
+    minScoreToBuy: effectiveMinScoreToBuy,
   });
   const output: DashboardOutput = {
     generated_at: new Date().toISOString(),
@@ -257,7 +259,12 @@ async function main() {
     meetsSharpeTarget: result.stats.sharpe >= (result.config.sharpeTarget ?? 3),
     primaryWindow: "post_cny_2026",
     validationStats: optimized.optimization?.validationStats,
-    optimizedParams: optimized.optimization?.optimizedParams,
+    optimizedParams: optimized.optimization?.optimizedParams ?? {
+      maxPositions: result.config.maxPositions,
+      minHoldBars: result.config.minHoldBars ?? 0,
+      rebalanceThresholdPct: result.config.rebalanceThresholdPct ?? 0,
+      minScoreToBuy: effectiveMinScoreToBuy,
+    },
     optimizationWarnings: optimized.optimization?.warnings ?? [],
     optimizationCandidates: optimized.optimization?.candidates ?? [],
   };
@@ -268,10 +275,16 @@ async function main() {
     source: latestPlan.source,
     score_model: latestPlan.scoreModel,
     signal_date: latestPlan.decisionDate,
+    latest_complete_date: latestPlan.decisionDate,
     signal_basis: snapshotBasis,
     snapshot_label: snapshotLabel,
     max_positions: latestPlan.maxPositions,
-    optimized_params: optimized.optimization?.optimizedParams,
+    optimized_params: optimized.optimization?.optimizedParams ?? {
+      maxPositions: result.config.maxPositions,
+      minHoldBars: result.config.minHoldBars ?? 0,
+      rebalanceThresholdPct: result.config.rebalanceThresholdPct ?? 0,
+      minScoreToBuy: effectiveMinScoreToBuy,
+    },
     universe_count: universe.length,
     scored_count: latestPlan.signals.length,
     skipped_count: Math.max(0, universe.length - latestPlan.signals.length),

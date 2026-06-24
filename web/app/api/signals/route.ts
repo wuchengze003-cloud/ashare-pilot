@@ -29,6 +29,7 @@ interface StaticSignalsSnapshot {
   source?: string;
   score_model?: string;
   signal_date?: string;
+  latest_complete_date?: string;
   signal_basis?: string;
   snapshot_label?: string;
   max_positions?: number;
@@ -98,6 +99,12 @@ function signalCounts(signals: Array<{ action: "buy" | "hold" | "sell" }>) {
   }, {});
 }
 
+function snapshotSignals(snapshot: StaticSignalsSnapshot, maxPositions: number) {
+  const raw = snapshot.signals ?? [];
+  if (snapshot.max_positions === maxPositions) return raw;
+  return toExecutableSignals(raw, { maxPositions });
+}
+
 function fallbackSignalsResponse(reason: string, maxPositions: number) {
   const snapshot = loadStaticSignalsSnapshot();
   if (!snapshot?.signals?.length) {
@@ -107,9 +114,7 @@ function fallbackSignalsResponse(reason: string, maxPositions: number) {
     );
   }
   const effectiveMaxPositions = snapshot.max_positions ?? maxPositions;
-  const signals = toExecutableSignals(snapshot.signals, {
-    maxPositions: effectiveMaxPositions,
-  });
+  const signals = snapshotSignals(snapshot, effectiveMaxPositions);
   return NextResponse.json({
     generated_at: new Date().toISOString(),
     source: "static-snapshot-fallback",
@@ -118,6 +123,7 @@ function fallbackSignalsResponse(reason: string, maxPositions: number) {
     stale: true,
     fallback_reason: reason,
     signal_date: snapshot.signal_date ?? null,
+    latest_complete_date: snapshot.latest_complete_date ?? snapshot.signal_date ?? null,
     signal_basis: snapshot.signal_basis ?? "cached-snapshot",
     snapshot_label: snapshot.snapshot_label ?? null,
     max_positions: effectiveMaxPositions,
@@ -138,9 +144,7 @@ function fallbackSignalsResponse(reason: string, maxPositions: number) {
 
 function runtimeSignalsResponse(snapshot: StaticSignalsSnapshot, maxPositions: number) {
   const effectiveMaxPositions = snapshot.max_positions ?? maxPositions;
-  const signals = toExecutableSignals(snapshot.signals ?? [], {
-    maxPositions: effectiveMaxPositions,
-  });
+  const signals = snapshotSignals(snapshot, effectiveMaxPositions);
   return NextResponse.json({
     generated_at: new Date().toISOString(),
     source: "runtime-snapshot",
@@ -148,6 +152,7 @@ function runtimeSignalsResponse(snapshot: StaticSignalsSnapshot, maxPositions: n
     score_model: snapshot.score_model ?? "dashboard-rule",
     stale: false,
     signal_date: snapshot.signal_date ?? null,
+    latest_complete_date: snapshot.latest_complete_date ?? snapshot.signal_date ?? null,
     signal_basis: snapshot.signal_basis ?? "cached-snapshot",
     snapshot_label: snapshot.snapshot_label ?? null,
     max_positions: effectiveMaxPositions,
@@ -186,13 +191,18 @@ export async function GET(req: NextRequest) {
     0,
     1,
   );
-  const asOf = req.nextUrl.searchParams.get("asOf") ?? new Date().toISOString().slice(0, 10);
+  const requestedAsOf = req.nextUrl.searchParams.get("asOf");
+  const asOf = requestedAsOf ?? new Date().toISOString().slice(0, 10);
   const runtimeSnapshot = loadStaticSignalsSnapshot();
+  const forceLive = req.nextUrl.searchParams.get("forceLive") === "1";
+  const hasCustomLiveParams =
+    req.nextUrl.searchParams.has("lookbackDays") ||
+    req.nextUrl.searchParams.has("minScoreToBuy");
   if (
-    req.nextUrl.searchParams.get("forceLive") !== "1" &&
+    !forceLive &&
+    !hasCustomLiveParams &&
     runtimeSnapshot?.signals?.length &&
-    runtimeSnapshot.signal_date === asOf &&
-    runtimeSnapshot.signal_basis === "intraday-midday"
+    (!requestedAsOf || runtimeSnapshot.signal_date === requestedAsOf)
   ) {
     return runtimeSignalsResponse(runtimeSnapshot, maxPositions);
   }
@@ -258,6 +268,7 @@ export async function GET(req: NextRequest) {
     source: "pyserver",
     score_model: "dashboard-rule",
     signal_date: signalDate,
+    latest_complete_date: signalDate,
     signal_basis: signalDate === asOf ? "realtime-spot-merged" : "latest-complete-bar",
     lookback_days: lookbackDays,
     max_positions: maxPositions,

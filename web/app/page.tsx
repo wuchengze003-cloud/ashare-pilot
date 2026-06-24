@@ -403,7 +403,7 @@ export default function Home() {
         </p>
         {backtest.optimizedParams && (
           <p className="muted">
-            样本内优化参数：最短持仓 {backtest.optimizedParams.minHoldBars} 日 · 换手阈值 {backtest.optimizedParams.rebalanceThresholdPct}% · 买入分数 {backtest.optimizedParams.minScoreToBuy.toFixed(2)}
+            当前固定参数：最短持仓 {backtest.optimizedParams.minHoldBars} 日 · 换手阈值 {backtest.optimizedParams.rebalanceThresholdPct}% · 买入分数 {backtest.optimizedParams.minScoreToBuy.toFixed(2)}
             {backtest.validationStats?.jan_2026 ? ` · 1月起算验证夏普 ${backtest.validationStats.jan_2026.sharpe.toFixed(2)}` : ""}
           </p>
         )}

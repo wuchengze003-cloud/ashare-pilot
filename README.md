@@ -32,7 +32,7 @@ flowchart LR
 | 位置 | 用途 | 是否提交 |
 |---|---|---|
 | `web/data/universe.json` | 股票池，人工维护或 AI 辅助刷新 | 是 |
-| `web/data/runtime/backtest.json` | 量化模拟仓、回测、交易记录、优化参数 | 否 |
+| `web/data/runtime/backtest.json` | 量化模拟仓、回测、交易记录、固定策略参数 | 否 |
 | `web/data/runtime/signals.json` | 明日交易计划 | 否 |
 | `web/data/runtime/analyst.json` | 现价与规则目标价快照 | 否 |
 | `web/data/runtime/meta.json` | 生成时间、股票池数量等元信息 | 否 |
@@ -78,7 +78,10 @@ cd web
 npm run dashboard:update
 ```
 
-该命令会刷新行情缓存、重建回测、生成 latestPlan，并写入 `web/data/runtime`。如果 pyserver 不在默认端口：
+该命令会刷新行情缓存、用固定策略参数重建回测、生成 latestPlan，并写入 `web/data/runtime`。
+日常刷新不会自动重选参数，避免历史交易和模拟仓路径每天漂移。需要做参数诊断时，
+显式运行 `DASHBOARD_OPTIMIZE=1 npm run dashboard:update`；诊断结果不能自动替换实盘化模拟仓参数，
+除非人工确认后再调整固定参数。如果 pyserver 不在默认端口：
 
 ```bash
 cd web
