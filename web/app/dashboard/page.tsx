@@ -24,6 +24,14 @@ function sideLabel(side: "buy" | "sell" | "reduce") {
   return "卖出";
 }
 
+function targetSignalLabel(
+  side: "buy" | "sell",
+  isHeld: boolean,
+) {
+  if (side === "sell") return "轮出信号";
+  return isHeld ? "目标保留" : "目标入选";
+}
+
 export default function DashboardPage() {
   const data = loadDashboardData();
   const universe = loadEntries();
@@ -73,6 +81,7 @@ export default function DashboardPage() {
   const holdingsValue = holdings.reduce((sum, item) => sum + item.value, 0);
   const latestCash = latestBar?.cash ?? 0;
   const latestEquity = latestBar?.equity ?? holdingsValue + latestCash;
+  const cashWeight = latestEquity > 0 ? latestCash / latestEquity : 0;
   const snapshotLabel = data?.snapshot_label ?? "完整收盘";
   const decisionBasisLabel = data?.snapshot_basis === "intraday-midday" ? "午盘快照决策" : "收盘决策";
   const targetBuys = data?.latestPlan?.signals.filter((s) => s.action === "buy" && s.size > 0) ?? [];
@@ -82,14 +91,14 @@ export default function DashboardPage() {
     .map((h) => ({
       symbol: h.sym,
       side: "sell" as const,
-      label: "卖出",
+      label: targetSignalLabel("sell", true),
       targetWeight: 0,
-      reason: "跌出明日目标组合，次日开盘优先卖出",
+      reason: "当前模拟仓不在明日目标信号内；满仓轮动时需先释放仓位",
     }));
   const plannedBuys = targetBuys.map((s) => ({
     symbol: s.symbol,
     side: "buy" as const,
-    label: holdings.some((h) => h.sym === s.symbol) ? "调仓" : "买入",
+    label: targetSignalLabel("buy", holdings.some((h) => h.sym === s.symbol)),
     targetWeight: s.size,
     reason: s.rationale,
   }));
@@ -218,23 +227,26 @@ export default function DashboardPage() {
 
             <div className="theme-panel">
               <div className="theme-title">
-                <strong>明日待执行</strong>
-                <span>{data.latestPlan?.decisionDate ?? data.latestDate} 决策 · 次日开盘</span>
+                <strong>明日目标信号</strong>
+                <span>{data.latestPlan?.decisionDate ?? data.latestDate} 收盘信号 · 现金 {((cashWeight || 0) * 100).toFixed(1)}%</span>
               </div>
+              <p className="muted" style={{ margin: "10px 14px 0" }}>
+                这是目标组合信号，不代表还有现金可直接加仓；模拟仓满仓时先看轮出信号，再决定是否切换到目标入选标的。
+              </p>
               <div className="table-wrap compact-table">
                 <table>
                   <thead>
                     <tr>
                       <th>代码</th>
                       <th>名称</th>
-                      <th>方向</th>
+                      <th>信号</th>
                       <th className="num">目标仓位</th>
                       <th>原因</th>
                     </tr>
                   </thead>
                   <tbody>
                     {plannedOrders.length === 0 && (
-                      <tr><td colSpan={5} className="muted">暂无待执行换仓</td></tr>
+                      <tr><td colSpan={5} className="muted">暂无目标信号变化</td></tr>
                     )}
                     {plannedOrders.map((order) => (
                       <tr key={`${order.side}-${order.symbol}`}>

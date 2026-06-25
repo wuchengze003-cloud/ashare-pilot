@@ -138,9 +138,9 @@ function money(v: number | null | undefined, fallback = "未覆盖") {
 }
 
 function actionLabel(action: SignalItem["action"] | undefined) {
-  if (action === "buy") return "买入";
-  if (action === "sell") return "卖出";
-  if (action === "hold") return "不交易";
+  if (action === "buy") return "目标入选";
+  if (action === "sell") return "退出信号";
+  if (action === "hold") return "观望";
   return "未评分";
 }
 
@@ -283,7 +283,7 @@ export default function Home() {
           <div>
             <span className="strategy-label">评分权重</span>
             <strong>价格 35% · 主题 30% · 成交量 20% · 趋势 15%</strong>
-            <p>基本面只做风险过滤；明日买入只保留组合前 {signalSnapshot.max_positions ?? backtest.config.maxPositions} 只。</p>
+            <p>基本面只做风险过滤；目标信号只保留组合前 {signalSnapshot.max_positions ?? backtest.config.maxPositions} 只。</p>
           </div>
           <div>
             <span className="strategy-label">买入形态</span>
@@ -356,14 +356,14 @@ export default function Home() {
       </section>
 
       <section id="signals">
-        <h2 className="subheading">明日交易计划</h2>
+        <h2 className="subheading">明日信号快照</h2>
         <p className="muted">
-          使用实时现价合并后的规则评分；信号日 {signalDate ?? "未生成"}。收盘后生成计划，按次日开盘成交口径回测。
+          使用收盘后规则评分；信号日 {signalDate ?? "未生成"}。这里是目标组合信号，不等于已有现金可直接加仓；满仓时需结合 Dashboard 的轮动提示先卖后买。
         </p>
         <div className="theme-panel">
           <div className="theme-title">
-            <strong>计划列表</strong>
-            <span>{buys} 买入 · {sells} 卖出</span>
+            <strong>信号列表</strong>
+            <span>{buys} 目标入选 · {sells} 退出信号</span>
           </div>
           <div className="table-wrap">
             <table>
@@ -372,9 +372,9 @@ export default function Home() {
                   <th>代码</th>
                   <th>名称</th>
                   <th>主题</th>
-                  <th>动作</th>
+                  <th>信号</th>
                   <th className="num">置信度</th>
-                  <th className="num">仓位</th>
+                  <th className="num">目标权重</th>
                   <th>理由</th>
                 </tr>
               </thead>
