@@ -88,7 +88,7 @@ export default function DashboardPage() {
     .map((h) => ({
       symbol: h.symbol,
       side: h.signal?.action === "sell" ? "sell" as const : h.signal?.action === "buy" ? "buy" as const : "hold" as const,
-      label: h.signal?.action === "sell" ? "卖出" : h.signal?.action === "buy" ? "调仓" : "持有",
+      label: h.signal?.action === "sell" ? "卖出" : "持有",
       targetWeight: h.signal?.action === "sell"
         ? 0
         : h.signal?.action === "buy"
@@ -104,7 +104,7 @@ export default function DashboardPage() {
       side: "buy" as const,
       label: "买入",
       targetWeight: s.size,
-      reason: s.rationale,
+      reason: cashWeight < s.size ? `现金不足，需先卖出释放仓位；${s.rationale}` : s.rationale,
     }));
   const plannedOrders = [...plannedHoldings, ...plannedBuys];
 
