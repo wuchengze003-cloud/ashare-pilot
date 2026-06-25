@@ -24,6 +24,12 @@ function sideLabel(side: "buy" | "sell" | "reduce") {
   return "卖出";
 }
 
+function plannedDirectionLabel(side: "buy" | "sell" | "hold", isHeld: boolean) {
+  if (side === "sell") return "卖出";
+  if (side === "hold") return "持有";
+  return isHeld ? "调仓" : "买入";
+}
+
 export default function DashboardPage() {
   const data = loadDashboardData();
   const universe = loadEntries();
@@ -78,19 +84,52 @@ export default function DashboardPage() {
   const decisionBasisLabel = data?.snapshot_basis === "intraday-midday" ? "午盘快照决策" : "收盘决策";
   const targetBuys = data?.latestPlan?.signals.filter((s) => s.action === "buy" && s.size > 0) ?? [];
   const targetSymbols = new Set(targetBuys.map((s) => s.symbol));
+  const hardSellSignals = new Map(
+    (data?.latestPlan?.signals ?? [])
+      .filter((s) => s.action === "sell")
+      .map((s) => [s.symbol, s]),
+  );
+  const barIndex = new Map((data?.equityCurve ?? []).map((bar, index) => [bar.date, index] as const));
+  const latestBarIndex = data ? barIndex.get(data.latestDate) ?? data.equityCurve.length - 1 : 0;
+  const nextTradeBarIndex = latestBarIndex + 1;
+  const minHoldBars = data?.config.minHoldBars ?? 0;
+  const heldBarsAtNextOpen = (symbol: string) => {
+    if (!data) return Number.POSITIVE_INFINITY;
+    const lastBuy = [...data.trades].reverse().find((t) => t.symbol === symbol && t.side === "buy");
+    const lastBuyIndex = lastBuy ? barIndex.get(lastBuy.tradeDate ?? lastBuy.date) : undefined;
+    return lastBuyIndex == null ? Number.POSITIVE_INFINITY : nextTradeBarIndex - lastBuyIndex;
+  };
   const plannedSells = holdings
     .filter((h) => !targetSymbols.has(h.sym))
     .map((h) => ({
       symbol: h.sym,
-      side: "sell" as const,
-      label: "卖出",
-      targetWeight: 0,
-      reason: "跌出明日目标组合，次日开盘优先卖出",
-    }));
+      hardSell: hardSellSignals.get(h.sym),
+      heldBars: heldBarsAtNextOpen(h.sym),
+      currentWeight: latestEquity > 0 ? h.value / latestEquity : 0,
+    }))
+    .map((h) => {
+      const canOrdinarySell = minHoldBars <= 0 || h.heldBars >= minHoldBars;
+      if (!h.hardSell && !canOrdinarySell) {
+        return {
+          symbol: h.symbol,
+          side: "hold" as const,
+          label: plannedDirectionLabel("hold", true),
+          targetWeight: h.currentWeight,
+          reason: `跌出目标组合，但未满最短持仓 ${minHoldBars} 日，暂不轮动卖出`,
+        };
+      }
+      return {
+        symbol: h.symbol,
+        side: "sell" as const,
+        label: plannedDirectionLabel("sell", true),
+        targetWeight: 0,
+        reason: h.hardSell?.rationale ?? "跌出明日目标组合，次日开盘优先卖出",
+      };
+    });
   const plannedBuys = targetBuys.map((s) => ({
     symbol: s.symbol,
     side: "buy" as const,
-    label: holdings.some((h) => h.sym === s.symbol) ? "调仓" : "买入",
+    label: plannedDirectionLabel("buy", holdings.some((h) => h.sym === s.symbol)),
     targetWeight: s.size,
     reason: s.rationale,
   }));
