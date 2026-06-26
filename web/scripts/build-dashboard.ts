@@ -19,7 +19,11 @@ import { ruleBasedScorer } from "../lib/dashboardBacktest";
 import { optimizeBacktest, type OptimizationResult } from "../lib/backtestOptimization";
 import { buildLatestPlan, type LatestPlan } from "../lib/latestPlan";
 import { writeRuntimeJson } from "../lib/runtimeData";
-import { buildSignalHistorySnapshot, writeSignalHistorySnapshot } from "../lib/signalHistory";
+import {
+  buildSignalHistorySnapshot,
+  readSignalHistorySnapshots,
+  writeSignalHistorySnapshot,
+} from "../lib/signalHistory";
 import {
   buildSymbolSeries,
   buildSymbolSeriesFromPyserverCache,
@@ -225,11 +229,20 @@ async function main() {
     sharpeTarget: 3,
     optimizationWindow: "post_cny_2026",
   };
+  const historicalSignalsByDate = Object.fromEntries(
+    readSignalHistorySnapshots(Number.POSITIVE_INFINITY)
+      .filter((snapshot) => snapshot.signal_date < endDate)
+      .map((snapshot) => [snapshot.signal_date, snapshot.signals]),
+  );
+  const runOptions = {
+    scorer: ruleBasedScorer({ minScoreToBuy }),
+    historicalSignalsByDate,
+  };
 
   const optimized = shouldOptimize
     ? await optimizeBacktest(series, cfg)
     : {
-      result: await runBacktest(series, cfg, { scorer: ruleBasedScorer({ minScoreToBuy }) }),
+      result: await runBacktest(series, cfg, runOptions),
       optimization: null,
     };
   const result = optimized.result;

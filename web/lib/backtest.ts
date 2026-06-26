@@ -159,6 +159,12 @@ export interface RunBacktestOptions {
   onProgress?: (p: Progress) => void;
   /** Override the default Dashboard rule scorer — used by tests to inject deterministic signals. */
   scorer?: Scorer;
+  /**
+   * Immutable signals that were already shown to the user for a decision date.
+   * Daily simulated portfolios must execute these archived plans instead of
+   * recomputing old signals with today's universe metadata or rule text.
+   */
+  historicalSignalsByDate?: Record<string, Signal[]>;
 }
 
 export async function runBacktest(
@@ -171,6 +177,7 @@ export async function runBacktest(
     : (optsOrOnProgress ?? {});
   const onProgress = opts.onProgress;
   const scorer: Scorer = opts.scorer ?? ruleBasedScorer();
+  const historicalSignalsByDate = opts.historicalSignalsByDate ?? {};
   const decisionEveryNDays = Math.max(
     1,
     Math.floor(cfg.decisionEveryNDays ?? cfg.rebalanceEveryNDays ?? 1),
@@ -229,6 +236,12 @@ export async function runBacktest(
     const slice = decisionDates.slice(i, i + CONCURRENCY);
     const results = await Promise.all(
       slice.map(async (d) => {
+        const archivedSignals = historicalSignalsByDate[d];
+        if (archivedSignals) {
+          signalsDone++;
+          onProgress?.({ phase: "signals", done: signalsDone, total: decisionDates.length });
+          return [d, archivedSignals.map((s) => ({ ...s }))] as const;
+        }
         const snapshots: SymbolSnapshot[] = series
           .map((s) => {
             // Include D close: the decision is made after close, then executed
@@ -376,9 +389,15 @@ export async function runBacktest(
         ).length
       : 0;
     const topBuys = rankedBuys.slice(0, Math.max(0, normalizedCfg.maxPositions - lockedUnselectedCount));
+    const explicitTargetWeightSum = topBuys.reduce((sum, s) => sum + s.size, 0);
+    const hasExplicitTargetWeights =
+      explicitTargetWeightSum > 0 && explicitTargetWeightSum <= 1 + 1e-6;
     const targetTotal = topBuys.reduce((sum, s) => sum + s.size * s.confidence, 0) || 1;
     const targetWeights = new Map(
-      topBuys.map((s) => [s.symbol, (s.size * s.confidence) / targetTotal] as const),
+      topBuys.map((s) => [
+        s.symbol,
+        hasExplicitTargetWeights ? s.size : (s.size * s.confidence) / targetTotal,
+      ] as const),
     );
     const hardSellSymbols = new Set(signals.filter(isHardExit).map((s) => s.symbol));
 

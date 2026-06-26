@@ -182,6 +182,41 @@ test("executes a close-after-decision at the next open price", async () => {
   assert.equal(r.equityCurve.find((b) => b.date === dates[5])?.positions["600000"].price, 10.2);
 });
 
+test("archived decision signals override recomputed scorer output and keep target weights", async () => {
+  const series: SymbolSeries[] = [
+    { entry: { symbol: "A", name: "A", theme: "T" }, klines: makeKlines("2025-01-01", Array.from({ length: N }, () => 100)) },
+    { entry: { symbol: "B", name: "B", theme: "T" }, klines: makeKlines("2025-01-01", Array.from({ length: N }, () => 100)) },
+  ];
+  const recomputed: Scorer = async (snaps) =>
+    snaps.map((s) => ({
+      symbol: s.symbol,
+      action: s.symbol === "B" ? "buy" : "hold",
+      confidence: s.symbol === "B" ? 1 : 0,
+      size: s.symbol === "B" ? 1 : 0,
+      rationale: "recomputed",
+    }));
+  const r = await runBacktest(
+    series,
+    { ...cfg, decisionEveryNDays: 1, rebalanceEveryNDays: 1, maxPositions: 2, autoSellUnselected: false },
+    {
+      scorer: recomputed,
+      historicalSignalsByDate: {
+        [dates[0]]: [
+          { symbol: "A", action: "buy", confidence: 0.5, size: 0.75, rationale: "archived A" },
+          { symbol: "B", action: "buy", confidence: 0.9, size: 0.25, rationale: "archived B" },
+        ],
+      },
+    },
+  );
+
+  const firstDayBuys = r.trades.filter((t) => t.decisionDate === dates[0] && t.side === "buy");
+  assert.deepEqual(firstDayBuys.map((t) => t.symbol).sort(), ["A", "B"]);
+  assert.equal(firstDayBuys.find((t) => t.symbol === "A")?.reason, "archived A");
+  assert.equal(firstDayBuys.find((t) => t.symbol === "B")?.reason, "archived B");
+  assert.equal(firstDayBuys.find((t) => t.symbol === "A")?.targetWeightAfter, 0.75);
+  assert.equal(firstDayBuys.find((t) => t.symbol === "B")?.targetWeightAfter, 0.25);
+});
+
 // Prepend 5 flat bars before the window so the first rebalance date has
 // history (signals only see closes strictly BEFORE the rebalance date).
 // 2024-12-25 (Wed) + 5 weekday bars lands exactly on 2024-12-31, so window
