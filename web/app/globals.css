@@ -97,19 +97,33 @@ input, select { background: var(--field); color: var(--fg); border: 1px solid va
 .dashboard-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
 .dashboard-actions form { display: inline-flex; }
 .dashboard-actions .button { text-decoration: none; }
-.dashboard-grid .recent-trades-panel { grid-column: 1 / -1; }
+.dashboard-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.dashboard-column { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .plan-table { min-width: 580px; table-layout: fixed; }
 .plan-table th:nth-child(1), .plan-table td:nth-child(1) { width: 78px; }
 .plan-table th:nth-child(2), .plan-table td:nth-child(2) { width: 92px; white-space: nowrap; }
 .plan-table th:nth-child(3), .plan-table td:nth-child(3) { width: 62px; white-space: nowrap; }
 .plan-table th:nth-child(4), .plan-table td:nth-child(4) { width: 72px; }
+.recent-table { min-width: 560px; table-layout: fixed; }
+.recent-table th:nth-child(1), .recent-table td:nth-child(1),
+.recent-table th:nth-child(2), .recent-table td:nth-child(2) { width: 106px; white-space: nowrap; }
+.recent-table th:nth-child(3), .recent-table td:nth-child(3) { width: 78px; }
+.recent-table th:nth-child(4), .recent-table td:nth-child(4) { width: 62px; white-space: nowrap; }
+.recent-table th:nth-child(5), .recent-table td:nth-child(5) { width: 88px; }
+.recent-table th:nth-child(6), .recent-table td:nth-child(6) { width: 72px; }
+.signal-summary-table { min-width: 560px; table-layout: fixed; }
+.signal-summary-table th:nth-child(1), .signal-summary-table td:nth-child(1) { width: 112px; white-space: nowrap; }
+.signal-summary-table th:nth-child(2), .signal-summary-table td:nth-child(2) { width: 96px; white-space: nowrap; }
+.signal-summary-table th:nth-child(3), .signal-summary-table td:nth-child(3),
+.signal-summary-table th:nth-child(4), .signal-summary-table td:nth-child(4) { width: 88px; }
+.signal-summary-table th:nth-child(5), .signal-summary-table td:nth-child(5) { width: 82px; }
 
 @media (max-width: 860px) {
   .container { padding: 16px; }
   .page-header, .section-heading { flex-direction: column; align-items: stretch; }
   .header-actions { justify-content: flex-start; }
   .summary-grid, .theme-grid, .strategy-grid { grid-template-columns: 1fr; }
-  .dashboard-grid .recent-trades-panel { grid-column: auto; }
+  .dashboard-columns { grid-template-columns: 1fr; }
   .strategy-panel-head { flex-direction: column; }
   .toolbar-status { margin-left: 0; width: 100%; }
   .field { flex: 1 1 160px; }

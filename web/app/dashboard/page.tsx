@@ -223,7 +223,8 @@ export default function DashboardPage() {
             <ThemeChart data={themeData} />
           </div>
 
-          <div className="theme-grid dashboard-grid" style={{ marginTop: 16 }}>
+          <div className="dashboard-columns" style={{ marginTop: 16 }}>
+            <div className="dashboard-column">
             <div className="theme-panel">
               <div className="theme-title">
                 <strong>量化模拟仓</strong>
@@ -264,6 +265,31 @@ export default function DashboardPage() {
               </div>
             </div>
 
+            <div className="theme-panel recent-trades-panel">
+              <div className="theme-title"><strong>最近交易</strong><span>近 10 / 共 {data.trades.length} 笔</span></div>
+              <div className="table-wrap compact-table">
+                <table className="recent-table">
+                  <thead>
+                    <tr><th>决策日</th><th>成交日</th><th>代码</th><th>方向</th><th className="num">数量</th><th className="num">价格</th></tr>
+                  </thead>
+                  <tbody>
+                    {data.trades.slice(-10).reverse().map((t, i) => (
+                      <tr key={i}>
+                        <td>{t.decisionDate ?? t.date}</td>
+                        <td>{t.tradeDate ?? t.date}</td>
+                        <td className="mono">{t.symbol}</td>
+                        <td><span className={`badge ${t.side}`}>{sideLabel(t.side)}</span></td>
+                        <td className="num">{t.shares}</td>
+                        <td className="num">{t.price.toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            </div>
+
+            <div className="dashboard-column">
             <div className="theme-panel">
               <div className="theme-title">
                 <strong>明日目标信号</strong>
@@ -298,31 +324,45 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className="theme-panel recent-trades-panel">
-              <div className="theme-title"><strong>最近交易</strong><span>共 {data.trades.length} 笔</span></div>
+            <div className="theme-panel signal-summary-panel">
+              <div className="theme-title">
+                <strong>近期信号表现</strong>
+                <span>{history.length} 个交易日 · 最新现价</span>
+              </div>
               <div className="table-wrap compact-table">
-                <table>
+                <table className="signal-summary-table">
                   <thead>
-                    <tr><th>决策日</th><th>成交日</th><th>代码</th><th>方向</th><th className="num">数量</th><th className="num">价格</th></tr>
+                    <tr>
+                      <th>信号日</th>
+                      <th>名称</th>
+                      <th className="num">信号价</th>
+                      <th className="num">现价</th>
+                      <th className="num">涨跌</th>
+                    </tr>
                   </thead>
                   <tbody>
-                    {data.trades.slice(-20).reverse().map((t, i) => (
-                      <tr key={i}>
-                        <td>{t.decisionDate ?? t.date}</td>
-                        <td>{t.tradeDate ?? t.date}</td>
-                        <td className="mono">{t.symbol}</td>
-                        <td><span className={`badge ${t.side}`}>{sideLabel(t.side)}</span></td>
-                        <td className="num">{t.shares}</td>
-                        <td className="num">{t.price.toFixed(2)}</td>
+                    {buySignalHistory.length === 0 && (
+                      <tr><td colSpan={5} className="muted">暂无历史信号归档</td></tr>
+                    )}
+                    {buySignalHistory.slice(0, 10).map((signal) => (
+                      <tr key={`summary-${signal.signalDate}-${signal.symbol}`}>
+                        <td className="mono">{signal.signalDate}</td>
+                        <td>{signal.name ?? nameMap.get(signal.symbol) ?? signal.symbol}</td>
+                        <td className="num">{numberOrDash(signal.signalPrice)}</td>
+                        <td className="num">{numberOrDash(signal.currentPrice)}</td>
+                        <td className={`num ${signal.changePct == null ? "muted" : signal.changePct >= 0 ? "pos" : "neg"}`}>
+                          {pctOrDash(signal.changePct)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             </div>
+            </div>
           </div>
 
-          <h2 className="subheading">历史买入信号表现</h2>
+          <h2 className="subheading">完整历史买入信号表现</h2>
           <div className="theme-panel">
             <div className="theme-title">
               <strong>信号归档</strong>
