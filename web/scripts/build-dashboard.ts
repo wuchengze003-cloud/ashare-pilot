@@ -19,6 +19,7 @@ import { ruleBasedScorer } from "../lib/dashboardBacktest";
 import { optimizeBacktest, type OptimizationResult } from "../lib/backtestOptimization";
 import { buildLatestPlan, type LatestPlan } from "../lib/latestPlan";
 import { writeRuntimeJson } from "../lib/runtimeData";
+import { buildSignalHistorySnapshot, writeSignalHistorySnapshot } from "../lib/signalHistory";
 import {
   buildSymbolSeries,
   buildSymbolSeriesFromPyserverCache,
@@ -291,11 +292,12 @@ async function main() {
     fundamentals: [],
     signals: latestPlan.signals,
   });
+  writeSignalHistorySnapshot(buildSignalHistorySnapshot(latestPlan, series));
   writeRuntimeJson("meta.json", {
     generated_at: new Date().toISOString(),
     universe_count: universe.length,
   });
-  console.log("Wrote runtime backtest/signals/meta to web/data/runtime");
+  console.log("Wrote runtime backtest/signals/history/meta to web/data/runtime");
   console.log(
     `Latest plan: ${latestPlan.decisionDate} ${snapshotLabel} -> next open, ` +
       `${latestPlan.signals.filter((s) => s.action === "buy").length} buys`,

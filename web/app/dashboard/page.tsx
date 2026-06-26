@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { readRuntimeJson } from "@/lib/runtimeData";
+import { readSignalHistorySnapshots } from "@/lib/signalHistory";
 import { loadEntries } from "@/lib/universe";
 import { EquityChart, ThemeChart } from "./Charts";
 import type { DashboardData } from "./types";
@@ -18,6 +19,14 @@ function money(v: number) {
   return `¥${Math.round(v).toLocaleString("en-US")}`;
 }
 
+function numberOrDash(v: number | null | undefined, digits = 2) {
+  return v == null || Number.isNaN(v) ? "暂无" : v.toFixed(digits);
+}
+
+function pctOrDash(v: number | null | undefined, digits = 1) {
+  return v == null || Number.isNaN(v) ? "暂无" : pct(v, digits);
+}
+
 function sideLabel(side: "buy" | "sell" | "reduce") {
   if (side === "buy") return "买入";
   if (side === "reduce") return "减仓";
@@ -27,8 +36,14 @@ function sideLabel(side: "buy" | "sell" | "reduce") {
 export default function DashboardPage() {
   const data = loadDashboardData();
   const universe = loadEntries();
+  const analyst = readRuntimeJson<{
+    items?: Array<{ symbol: string; current_price?: number | null; current_price_as_of?: string | null }>;
+  }>("analyst.json");
+  const history = readSignalHistorySnapshots(30);
   const nameMap = new Map(universe.map((e) => [e.symbol, e.name]));
   const themeMap = new Map(universe.map((e) => [e.symbol, e.theme]));
+  const currentPriceBySymbol = new Map((analyst?.items ?? []).map((item) => [item.symbol, item.current_price ?? null]));
+  const currentAsOfBySymbol = new Map((analyst?.items ?? []).map((item) => [item.symbol, item.current_price_as_of ?? null]));
 
   const equityData = data
     ? data.equityCurve.map((b, i) => ({
@@ -107,6 +122,26 @@ export default function DashboardPage() {
       reason: cashWeight < s.size ? `现金不足，需先卖出释放仓位；${s.rationale}` : s.rationale,
     }));
   const plannedOrders = [...plannedHoldings, ...plannedBuys];
+  const buySignalHistory = history
+    .flatMap((snapshot) =>
+      snapshot.signals
+        .filter((signal) => signal.action === "buy" && signal.size > 0)
+        .map((signal) => {
+          const currentPrice = currentPriceBySymbol.get(signal.symbol) ?? null;
+          const changePct =
+            currentPrice != null && signal.signalPrice != null && signal.signalPrice > 0
+              ? (currentPrice / signal.signalPrice - 1) * 100
+              : null;
+          return {
+            ...signal,
+            signalDate: snapshot.signal_date,
+            currentPrice,
+            currentAsOf: currentAsOfBySymbol.get(signal.symbol) ?? null,
+            changePct,
+          };
+        }),
+    )
+    .slice(0, 80);
 
   return (
     <div className="container">
@@ -284,6 +319,53 @@ export default function DashboardPage() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          </div>
+
+          <h2 className="subheading">历史买入信号表现</h2>
+          <div className="theme-panel">
+            <div className="theme-title">
+              <strong>信号归档</strong>
+              <span>{history.length} 个交易日 · 现价来自最新快照</span>
+            </div>
+            <div className="table-wrap compact-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>信号日</th>
+                    <th>代码</th>
+                    <th>名称</th>
+                    <th>主题</th>
+                    <th className="num">信号价</th>
+                    <th className="num">现价</th>
+                    <th className="num">信号后涨跌</th>
+                    <th>理由</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {buySignalHistory.length === 0 && (
+                    <tr><td colSpan={8} className="muted">暂无历史信号归档</td></tr>
+                  )}
+                  {buySignalHistory.map((signal) => (
+                    <tr key={`${signal.signalDate}-${signal.symbol}`}>
+                      <td className="mono">{signal.signalDate}</td>
+                      <td className="mono">{signal.symbol}</td>
+                      <td>{signal.name ?? nameMap.get(signal.symbol) ?? "名称未收录"}</td>
+                      <td>{signal.theme ?? themeMap.get(signal.symbol) ?? "主题未收录"}</td>
+                      <td className="num" title={signal.signalPriceDate ?? undefined}>
+                        {numberOrDash(signal.signalPrice)}
+                      </td>
+                      <td className="num" title={signal.currentAsOf ?? undefined}>
+                        {numberOrDash(signal.currentPrice)}
+                      </td>
+                      <td className={`num ${signal.changePct == null ? "muted" : signal.changePct >= 0 ? "pos" : "neg"}`}>
+                        {pctOrDash(signal.changePct)}
+                      </td>
+                      <td className="muted signal-reason">{signal.rationale}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         </>

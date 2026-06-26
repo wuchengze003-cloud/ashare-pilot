@@ -26,3 +26,15 @@ export function writeRuntimeJson(name: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", "utf-8");
 }
+
+export function listRuntimeJson<T>(dirName: string): Array<{ name: string; data: T }> {
+  const dir = runtimeDataPath(dirName);
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .map((name) => ({
+      name,
+      data: JSON.parse(fs.readFileSync(path.join(dir, name), "utf-8")) as T,
+    }));
+}
