@@ -223,7 +223,7 @@ export default function DashboardPage() {
             <ThemeChart data={themeData} />
           </div>
 
-          <div className="theme-grid" style={{ marginTop: 16 }}>
+          <div className="theme-grid dashboard-grid" style={{ marginTop: 16 }}>
             <div className="theme-panel">
               <div className="theme-title">
                 <strong>量化模拟仓</strong>
@@ -270,7 +270,7 @@ export default function DashboardPage() {
                 <span>{data.latestPlan?.decisionDate ?? data.latestDate} 收盘信号 · 现金 {((cashWeight || 0) * 100).toFixed(1)}%</span>
               </div>
               <div className="table-wrap compact-table">
-                <table>
+                <table className="plan-table">
                   <thead>
                     <tr>
                       <th>代码</th>
@@ -298,7 +298,7 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className="theme-panel">
+            <div className="theme-panel recent-trades-panel">
               <div className="theme-title"><strong>最近交易</strong><span>共 {data.trades.length} 笔</span></div>
               <div className="table-wrap compact-table">
                 <table>
