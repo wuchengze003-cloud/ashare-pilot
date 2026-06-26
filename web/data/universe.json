@@ -1,7 +1,7 @@
 {
   "$schema_note": "硅基文明消费股 watchlist. Edit via UI or directly. Each entry: {symbol, name, theme, note?}.",
-  "updated_at": "2026-06-17",
-  "updated_by": "backend-research-refresh",
+  "updated_at": "2026-06-26",
+  "updated_by": "codex-note-cleanup",
   "entries": [
     {
       "symbol": "688256",
@@ -91,7 +91,8 @@
       "symbol": "301205",
       "name": "联特科技",
       "theme": "光模块",
-      "global_supply": true
+      "global_supply": true,
+      "note": "高速光模块，布局800G/1.6T"
     },
     {
       "symbol": "300620",
@@ -132,7 +133,8 @@
       "symbol": "603019",
       "name": "中科曙光",
       "theme": "AI服务器",
-      "global_supply": false
+      "global_supply": false,
+      "note": "国产服务器与超算平台"
     },
     {
       "symbol": "000938",
@@ -152,7 +154,8 @@
       "symbol": "300499",
       "name": "高澜股份",
       "theme": "液冷",
-      "global_supply": false
+      "global_supply": false,
+      "note": "数据中心液冷设备"
     },
     {
       "symbol": "300602",
@@ -179,7 +182,8 @@
       "symbol": "600886",
       "name": "国投电力",
       "theme": "电力",
-      "global_supply": false
+      "global_supply": false,
+      "note": "清洁电力，水火风光并济"
     },
     {
       "symbol": "600011",
@@ -192,19 +196,22 @@
       "symbol": "300383",
       "name": "光环新网",
       "theme": "IDC",
-      "global_supply": false
+      "global_supply": false,
+      "note": "IDC与云计算服务商"
     },
     {
       "symbol": "603881",
       "name": "数据港",
       "theme": "IDC",
-      "global_supply": false
+      "global_supply": false,
+      "note": "批发型IDC，服务云厂商"
     },
     {
       "symbol": "300738",
       "name": "奥飞数据",
       "theme": "IDC",
-      "global_supply": false
+      "global_supply": false,
+      "note": "自建IDC，面向智算需求"
     },
     {
       "symbol": "002335",
@@ -378,34 +385,35 @@
       "symbol": "002436",
       "name": "兴森科技",
       "theme": "AI-PCB",
-      "global_supply": false
+      "global_supply": false,
+      "note": "PCB与IC载板国产化"
     },
     {
       "symbol": "688261",
       "name": "东微半导",
       "theme": "功率器件",
-      "note": "高压超级结MOSFET龙头，AI服务器电源核心功率器件供应商",
+      "note": "高压超级结MOSFET龙头",
       "global_supply": false
     },
     {
       "symbol": "688019",
       "name": "安集科技",
       "theme": "半导体材料",
-      "note": "CMP抛光液龙头，已供货台积电等全球先进制程晶圆厂",
+      "note": "CMP抛光液龙头",
       "global_supply": true
     },
     {
       "symbol": "002409",
       "name": "雅克科技",
       "theme": "半导体材料",
-      "note": "半导体前驱体与SOD龙头，向SK海力士、三星等出货用于HBM先进制程",
+      "note": "前驱体/SOD材料平台",
       "global_supply": true
     },
     {
       "symbol": "688981",
       "name": "中芯国际",
       "theme": "晶圆代工",
-      "note": "中国大陆晶圆代工龙头，先进制程为AI芯片提供代工",
+      "note": "大陆晶圆代工龙头",
       "global_supply": false
     },
     {
@@ -440,14 +448,14 @@
       "symbol": "000021",
       "name": "深科技",
       "theme": "存储/HBM",
-      "note": "内存芯片封测龙头，为海力士等国际大厂提供存储芯片封装测试服务，间接受益于HBM扩产",
+      "note": "存储芯片封测服务商",
       "global_supply": true
     },
     {
       "symbol": "002475",
       "name": "立讯精密",
       "theme": "AI服务器",
-      "note": "进入英伟达GB200供应链，提供服务器组装及高速铜缆互连组件，深度参与全球AI服务器制造",
+      "note": "AI服务器与高速互连",
       "global_supply": true
     },
     {
@@ -482,7 +490,7 @@
       "symbol": "688347",
       "name": "华虹公司",
       "theme": "晶圆代工",
-      "note": "国内第二大晶圆代工厂，特色工艺助力AI功率和存储",
+      "note": "特色工艺晶圆代工",
       "global_supply": false
     },
     {
@@ -510,42 +518,42 @@
       "symbol": "002837",
       "name": "英维克",
       "theme": "液冷",
-      "note": "数据中心温控龙头，冷板式液冷解决方案领先，受益AI算力散热需求",
+      "note": "数据中心温控与液冷",
       "global_supply": false
     },
     {
       "symbol": "601985",
       "name": "中国核电",
       "theme": "电力",
-      "note": "核电运营商，受益于AI带来的稳定清洁电力需求",
+      "note": "核电运营，稳定清洁电力",
       "global_supply": false
     },
     {
       "symbol": "688676",
       "name": "金盘科技",
       "theme": "电力设备",
-      "note": "干式变压器龙头，产品用于数据中心配电，出口全球",
+      "note": "干式变压器配套数据中心",
       "global_supply": true
     },
     {
       "symbol": "300693",
       "name": "盛弘股份",
       "theme": "电力设备",
-      "note": "电能质量与UPS设备，AIDC基础设施核心供应商",
+      "note": "UPS与电能质量设备",
       "global_supply": false
     },
     {
       "symbol": "002364",
       "name": "中恒电气",
       "theme": "电力设备",
-      "note": "HVDC电源系统龙头，为数据中心提供高效直流供电",
+      "note": "HVDC电源配套数据中心",
       "global_supply": false
     },
     {
       "symbol": "002851",
       "name": "麦格米特",
       "theme": "电力设备",
-      "note": "服务器电源已进入英伟达供应链，AI算力核心供电器件",
+      "note": "服务器电源与电源模块",
       "global_supply": true
     },
     {
@@ -559,49 +567,49 @@
       "symbol": "600563",
       "name": "法拉电子",
       "theme": "功率器件",
-      "note": "薄膜电容龙头，广泛应用于服务器电源及新能源，受益AI电源链",
+      "note": "薄膜电容用于电源链",
       "global_supply": false
     },
     {
       "symbol": "002138",
       "name": "顺络电子",
       "theme": "功率器件",
-      "note": "电感龙头，全球消费电子及汽车核心供应商，可延伸至AI服务器",
+      "note": "电感器件配套AI服务器",
       "global_supply": true
     },
     {
       "symbol": "603678",
       "name": "火炬电子",
       "theme": "功率器件",
-      "note": "MLCC及特种电容，受益于AI服务器对被动元件需求激增",
+      "note": "MLCC与特种电容",
       "global_supply": false
     },
     {
       "symbol": "300475",
       "name": "香农芯创",
       "theme": "存储/HBM",
-      "note": "SK海力士HBM主要代理商，直接受益于AI存储需求爆发",
+      "note": "SK海力士存储代理",
       "global_supply": true
     },
     {
       "symbol": "603228",
       "name": "景旺电子",
       "theme": "AI-PCB",
-      "note": "高端PCB制造商，产品可应用于AI服务器，补全PCB板块",
+      "note": "高端PCB配套AI服务器",
       "global_supply": false
     },
     {
       "symbol": "688205",
       "name": "德科立",
       "theme": "光模块",
-      "note": "光模块及光放大器供应商，AI数据中心光互联重要环节",
+      "note": "光模块与光放大器",
       "global_supply": false
     },
     {
       "symbol": "000063",
       "name": "中兴通讯",
       "theme": "AI服务器",
-      "note": "ICT龙头，AI服务器出货量国内前列，算力基础设施核心供应商",
+      "note": "AI服务器与算力网络",
       "global_supply": false
     },
     {
@@ -629,14 +637,14 @@
       "symbol": "300408",
       "name": "三环集团",
       "theme": "功率器件",
-      "note": "MLCC及陶瓷封装龙头，AI服务器大量使用被动元件",
+      "note": "MLCC与陶瓷封装",
       "global_supply": false
     },
     {
       "symbol": "600667",
       "name": "太极实业",
       "theme": "存储/HBM",
-      "note": "旗下海太半导体为SK海力士提供后工序，含HBM封装",
+      "note": "海太半导，SK海力士封测",
       "global_supply": true
     },
     {

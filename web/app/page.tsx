@@ -331,7 +331,7 @@ export default function Home() {
                           <td className="mono">{entry.symbol}</td>
                           <td>
                             <div className="stock-name">{entry.name}</div>
-                            {entry.note && <div className="stock-note">{entry.note}</div>}
+                            {entry.note && <div className="stock-note" title={entry.note}>{entry.note}</div>}
                           </td>
                           <td>{entry.global_supply ? <span className="pill good">是</span> : <span className="pill">否</span>}</td>
                           <td className="num">{num(a?.current_price)}</td>

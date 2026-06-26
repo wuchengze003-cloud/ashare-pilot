@@ -324,7 +324,7 @@ export default function UniverseTable({
                         <td className="mono">{r.symbol}</td>
                         <td>
                           <div className="stock-name">{r.name}</div>
-                          {r.note && <div className="stock-note">{r.note}</div>}
+                          {r.note && <div className="stock-note" title={r.note}>{r.note}</div>}
                         </td>
                         <td>{r.global_supply ? <span className="pill good">是</span> : <span className="pill">否</span>}</td>
                         <td className="num" title={r.analyst?.current_price_source ?? undefined}>
