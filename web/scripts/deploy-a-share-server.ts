@@ -31,6 +31,7 @@ if (!deployHost) {
   throw new Error("DEPLOY_HOST is required, for example DEPLOY_HOST=root@your-server");
 }
 
+run("npm", ["run", "dashboard:validate"], path.resolve(repoRoot, "web"));
 run("ssh", [deployHost, `mkdir -p ${shellQuote(deployPath)}`]);
 run("rsync", [
   "-az",
@@ -58,6 +59,7 @@ run("ssh", [
   [
     `cd ${shellQuote(`${deployPath}/web`)}`,
     "npm ci",
+    "npm run dashboard:validate",
     `NEXT_BASE_PATH=${shellQuote(nextBasePath)} npm run build`,
     `systemctl restart ${shellQuote(serviceName)}`,
     `systemctl is-active ${shellQuote(serviceName)}`,

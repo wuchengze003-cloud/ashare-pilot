@@ -24,6 +24,7 @@ import {
   readSignalHistorySnapshots,
   writeSignalHistorySnapshot,
 } from "../lib/signalHistory";
+import { assertRuntimeArtifacts, readRuntimeValidationInput } from "../lib/runtimeValidation";
 import {
   buildSymbolSeries,
   buildSymbolSeriesFromPyserverCache,
@@ -284,7 +285,7 @@ async function main() {
   };
 
   writeRuntimeJson("backtest.json", output);
-  writeRuntimeJson("signals.json", {
+  const signalsOutput = {
     generated_at: new Date().toISOString(),
     source: latestPlan.source,
     score_model: latestPlan.scoreModel,
@@ -304,12 +305,14 @@ async function main() {
     skipped_count: Math.max(0, universe.length - latestPlan.signals.length),
     fundamentals: [],
     signals: latestPlan.signals,
-  });
+  };
+  writeRuntimeJson("signals.json", signalsOutput);
   writeSignalHistorySnapshot(buildSignalHistorySnapshot(latestPlan, series));
   writeRuntimeJson("meta.json", {
     generated_at: new Date().toISOString(),
     universe_count: universe.length,
   });
+  assertRuntimeArtifacts(readRuntimeValidationInput());
   console.log("Wrote runtime backtest/signals/history/meta to web/data/runtime");
   console.log(
     `Latest plan: ${latestPlan.decisionDate} ${snapshotLabel} -> next open, ` +
