@@ -97,8 +97,7 @@ input, select { background: var(--field); color: var(--fg); border: 1px solid va
 .dashboard-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
 .dashboard-actions form { display: inline-flex; }
 .dashboard-actions .button { text-decoration: none; }
-.dashboard-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
-.dashboard-column { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.dashboard-grid { align-items: stretch; }
 .plan-table { min-width: 580px; table-layout: fixed; }
 .plan-table th:nth-child(1), .plan-table td:nth-child(1) { width: 78px; }
 .plan-table th:nth-child(2), .plan-table td:nth-child(2) { width: 92px; white-space: nowrap; }
@@ -123,7 +122,6 @@ input, select { background: var(--field); color: var(--fg); border: 1px solid va
   .page-header, .section-heading { flex-direction: column; align-items: stretch; }
   .header-actions { justify-content: flex-start; }
   .summary-grid, .theme-grid, .strategy-grid { grid-template-columns: 1fr; }
-  .dashboard-columns { grid-template-columns: 1fr; }
   .strategy-panel-head { flex-direction: column; }
   .toolbar-status { margin-left: 0; width: 100%; }
   .field { flex: 1 1 160px; }
