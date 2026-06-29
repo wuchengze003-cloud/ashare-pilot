@@ -17,6 +17,8 @@ export interface RuntimeMetaSnapshot {
 }
 
 export interface RuntimeBacktestSnapshot extends BacktestResult {
+  snapshot_basis?: "latest-complete-close" | "intraday-midday";
+  snapshot_label?: string;
   latestDate?: string;
   latestPlan?: LatestPlan;
   latestHoldings?: BacktestResult["equityCurve"][number]["positions"];

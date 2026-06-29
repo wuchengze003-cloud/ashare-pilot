@@ -71,7 +71,19 @@ npm run dev -- --port 3100
 
 ## 日常刷新
 
-每天收盘后运行：
+每天收盘后的唯一人工入口：
+
+```bash
+cd web
+npm run daily:close
+```
+
+该命令会按顺序完成：启动或复用 pyserver、刷新本地行情与回测、校验当日完整收盘与股票池全量覆盖、
+运行 Python/TypeScript/单元测试/生产构建体检、部署服务器、启动本地 3100 页面，并验收本地与服务器的首页、Dashboard 和信号 API。
+任一硬门槛失败都会停止部署，不会把旧快照当作今日数据。结构化运行结果写入
+`web/data/runtime/daily-close-health.json`（不入库）。
+
+底层数据刷新命令仍保留，仅用于调试：
 
 ```bash
 cd web
@@ -131,7 +143,8 @@ DEPLOY_HOST=root@47.77.231.22 NEXT_BASE_PATH=/a-share npm run deploy:server
 |---|---|
 | 启动 sidecar | `cd pyserver && uv run uvicorn main:app --port 8001 --reload` |
 | 启动 Web dev server | `cd web && npm run dev` |
-| 更新量化模拟仓与明日计划 | `cd web && npm run dashboard:update` |
+| 收盘后全流程更新、体检与部署 | `cd web && npm run daily:close` |
+| 仅更新量化模拟仓与明日计划 | `cd web && npm run dashboard:update` |
 | 仅重建 Dashboard 回测数据 | `cd web && npm run dashboard:build` |
 | 类型检查 | `cd web && ./node_modules/.bin/tsc --noEmit` |
 | 单元测试 | `cd web && npm test` |
