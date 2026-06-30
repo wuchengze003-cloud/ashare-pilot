@@ -1,0 +1,7 @@
+[Unit]
+Description=Check Umami analytics health
+After=umami.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/umami-healthcheck

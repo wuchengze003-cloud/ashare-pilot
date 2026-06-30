@@ -30,7 +30,7 @@ RestrictRealtime=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=
 AmbientCapabilities=
-MemoryHigh=384M
+MemoryHigh=448M
 MemoryMax=512M
 TasksMax=256
 

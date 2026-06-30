@@ -4,7 +4,8 @@ The production site uses Umami `v3.2.0` at commit
 `2f6e2b5ff256862a081d9e74bed18a42ebf795e3` with audited dependency overrides.
 It runs on `127.0.0.1:3102` with PostgreSQL. Nginx exposes only the tracker,
 recorder, collection endpoints, and this site's recorder configuration. The
-login UI and reporting APIs are not public.
+login UI and reporting APIs are not public. A systemd timer checks the local
+heartbeat every minute and restarts Umami if the process becomes unresponsive.
 
 ## Install or rebuild
 

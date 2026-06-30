@@ -111,8 +111,12 @@ chmod -R a+rX "${RELEASE_DIR}"
 ln -sfn "${RELEASE_DIR}" /opt/umami/current
 
 install -o root -g root -m 0644 "${SCRIPT_DIR}/umami.service" /etc/systemd/system/umami.service
+install -o root -g root -m 0755 "${SCRIPT_DIR}/umami-healthcheck.sh" /usr/local/sbin/umami-healthcheck
+install -o root -g root -m 0644 "${SCRIPT_DIR}/umami-healthcheck.service" /etc/systemd/system/umami-healthcheck.service
+install -o root -g root -m 0644 "${SCRIPT_DIR}/umami-healthcheck.timer" /etc/systemd/system/umami-healthcheck.timer
 systemctl daemon-reload
 systemctl enable --now umami.service
+systemctl enable --now umami-healthcheck.timer
 
 for _ in $(seq 1 60); do
   curl -fsS http://127.0.0.1:3102/analytics/api/heartbeat >/dev/null 2>&1 && break
