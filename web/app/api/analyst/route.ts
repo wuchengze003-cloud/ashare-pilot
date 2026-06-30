@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchAnalyst, fetchSpot } from "@/lib/pyserver";
+import { isAshareSymbol } from "@/lib/apiSecurity";
 
 export const runtime = "nodejs";
 
@@ -15,6 +16,7 @@ function timeout(ms: number): Promise<never> {
 export async function GET(req: NextRequest) {
   const symbol = req.nextUrl.searchParams.get("symbol");
   if (!symbol) return NextResponse.json({ error: "symbol required" }, { status: 400 });
+  if (!isAshareSymbol(symbol)) return NextResponse.json({ error: "invalid A-share symbol" }, { status: 400 });
   try {
     const data = await Promise.race([fetchAnalyst(symbol), timeout(ANALYST_TIMEOUT_MS)]);
     return NextResponse.json(data);

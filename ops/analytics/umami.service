@@ -1,0 +1,38 @@
+[Unit]
+Description=Umami analytics
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=umami
+Group=umami
+WorkingDirectory=/opt/umami/current
+EnvironmentFile=/etc/umami/umami.env
+ExecStart=/usr/bin/node server.js
+SuccessExitStatus=143 SIGTERM
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryHigh=384M
+MemoryMax=512M
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

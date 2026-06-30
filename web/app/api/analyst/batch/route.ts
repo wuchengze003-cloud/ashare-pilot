@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchAnalysts, fetchAnalyst } from "@/lib/pyserver";
 import { fallback, timeout } from "@/lib/analyst-fallback";
+import { parseAshareSymbols } from "@/lib/apiSecurity";
 
 export const runtime = "nodejs";
 
@@ -8,10 +9,9 @@ const ANALYST_TIMEOUT_MS = 35_000;
 
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as { symbols?: unknown };
-  const symbols = Array.isArray(body.symbols)
-    ? [...new Set(body.symbols.filter((s): s is string => typeof s === "string" && s.trim().length > 0).map((s) => s.trim()))]
-    : [];
-  if (symbols.length === 0) return NextResponse.json({ error: "symbols required" }, { status: 400 });
+  const parsed = parseAshareSymbols(body.symbols);
+  if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: parsed.status });
+  const { symbols } = parsed;
 
   try {
     if (symbols.length === 1) {

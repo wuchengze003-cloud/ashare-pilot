@@ -30,5 +30,10 @@
     "eslint-config-next": "^15.1.4",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
+  },
+  "overrides": {
+    "esbuild": "0.28.1",
+    "js-yaml": "4.2.0",
+    "postcss": "8.5.16"
   }
 }

@@ -257,10 +257,10 @@ export default function Home() {
           <p className="muted">{generatedLine(meta, universe, marketDate, signalSnapshot)}</p>
         </div>
         <nav className="header-actions" aria-label="页面导航">
-          <a href="#universe" className="button secondary">股票池</a>
-          <a href="#signals" className="button secondary">策略信号</a>
-          <a href="#backtest" className="button secondary">回测</a>
-          <Link href="/dashboard" className="button secondary">Dashboard</Link>
+          <a href="#universe" className="button secondary" data-umami-event="nav-universe">股票池</a>
+          <a href="#signals" className="button secondary" data-umami-event="nav-signals">策略信号</a>
+          <a href="#backtest" className="button secondary" data-umami-event="nav-backtest">回测</a>
+          <Link href="/dashboard" className="button secondary" data-umami-event="nav-dashboard">Dashboard</Link>
         </nav>
       </header>
 

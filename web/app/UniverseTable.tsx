@@ -30,7 +30,7 @@ type Row = UniverseEntry & { analyst?: Analyst | null; loading?: boolean };
 
 const ANALYST_BATCH_SIZE = 1;
 const ANALYST_BATCH_CONCURRENCY = 2;
-const SPOT_BATCH_SIZE = 1000;
+const SPOT_BATCH_SIZE = 100;
 const EMPTY_SPOTS: Spot[] = [];
 
 function hasResearchValue(analyst: Analyst): boolean {

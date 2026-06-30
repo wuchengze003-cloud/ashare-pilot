@@ -7,6 +7,7 @@ import { readRuntimeJson } from "@/lib/runtimeData";
 import { toExecutableSignals } from "@/lib/signalPolicy";
 import type { SymbolSnapshot } from "@/lib/strategyTypes";
 import { loadEntries } from "@/lib/universe";
+import { hasInternalApiAccess, internalApiDeniedResponse } from "@/lib/apiSecurity";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
@@ -198,6 +199,14 @@ export async function GET(req: NextRequest) {
   const hasCustomLiveParams =
     req.nextUrl.searchParams.has("lookbackDays") ||
     req.nextUrl.searchParams.has("minScoreToBuy");
+  const requiresLiveData =
+    forceLive ||
+    hasCustomLiveParams ||
+    !runtimeSnapshot?.signals?.length ||
+    Boolean(requestedAsOf && runtimeSnapshot.signal_date !== requestedAsOf);
+  if (requiresLiveData && !hasInternalApiAccess(req.headers)) {
+    return internalApiDeniedResponse();
+  }
   if (
     !forceLive &&
     !hasCustomLiveParams &&

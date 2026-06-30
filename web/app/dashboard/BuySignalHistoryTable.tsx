@@ -112,6 +112,7 @@ export function BuySignalHistoryTable({
               setPage(1);
             }}
             aria-label="每页显示条数"
+            data-umami-event="history-page-size"
           >
             {PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
           </select>
@@ -121,6 +122,7 @@ export function BuySignalHistoryTable({
           className="secondary"
           disabled={paginated.page <= 1}
           onClick={() => setPage((current) => Math.max(1, current - 1))}
+          data-umami-event="history-previous-page"
         >
           上一页
         </button>
@@ -130,6 +132,7 @@ export function BuySignalHistoryTable({
           className="secondary"
           disabled={paginated.page >= paginated.totalPages}
           onClick={() => setPage((current) => Math.min(paginated.totalPages, current + 1))}
+          data-umami-event="history-next-page"
         >
           下一页
         </button>

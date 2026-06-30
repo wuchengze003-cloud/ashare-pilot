@@ -136,7 +136,7 @@ export default function DashboardPage() {
 
   return (
     <div className="container">
-      <Link href="/" className="back-link">返回股票池</Link>
+      <Link href="/" className="back-link" data-umami-event="nav-home">返回股票池</Link>
       <header className="page-header compact">
         <div>
           <div className="eyebrow">Dashboard</div>

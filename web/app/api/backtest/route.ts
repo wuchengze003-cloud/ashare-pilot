@@ -4,6 +4,7 @@ import { fetchKlines, type Kline } from "@/lib/pyserver";
 import { runBacktest, type BacktestConfig, type SymbolSeries } from "@/lib/backtest";
 import { mapPool } from "@/lib/concurrent";
 import { saveBacktestResult } from "@/lib/cache";
+import { hasInternalApiAccess, internalApiDeniedResponse } from "@/lib/apiSecurity";
 
 const LOAD_CONCURRENCY = Number(process.env.BACKTEST_LOAD_CONCURRENCY ?? 6);
 
@@ -16,6 +17,8 @@ export const maxDuration = 300;
 //   { type: "result", result, stored }    // terminal — full BacktestResult
 //   { type: "error", message }            // terminal
 export async function POST(req: NextRequest) {
+  if (!hasInternalApiAccess(req.headers)) return internalApiDeniedResponse();
+
   const body = (await req.json()) as Partial<BacktestConfig> & {
     startDate: string;
     endDate: string;
