@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
-import { readUniverse } from "@/lib/universe";
-import { proposeRefresh, applyRefresh } from "@/lib/universe-refresh";
+import { activeEntriesAsOf, readUniverse } from "@/lib/universe";
+import { proposeRefresh } from "@/lib/universe-refresh";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
@@ -24,7 +24,9 @@ export async function POST(req: NextRequest) {
       };
       try {
         const current = readUniverse();
-        send({ type: "log", message: `当前股票池 ${current.entries.length} 只，请求 DeepSeek 提议变更…` });
+        const today = new Date().toISOString().slice(0, 10);
+        const activeCount = activeEntriesAsOf(current.entries, today).length;
+        send({ type: "log", message: `当前正式池 ${activeCount} 只，请求 DeepSeek 提议变更…` });
 
         const proposal = await proposeRefresh(current);
         send({
@@ -33,24 +35,15 @@ export async function POST(req: NextRequest) {
         });
         send({ type: "log", message: proposal.rationale });
 
-        let validated = 0;
-        const total = proposal.adds.filter(
-          (a) => a.symbol && !current.entries.some((e) => e.symbol === a.symbol),
-        ).length;
-        send({ type: "progress", done: 0, total });
-
-        const result = await applyRefresh(current, proposal, {
-          onValidate: (symbol, ok) => {
-            validated++;
-            send({
-              type: "log",
-              message: `${ok ? "✓" : "✗"} 验证 ${symbol}`,
-            });
-            send({ type: "progress", done: validated, total });
+        send({
+          type: "result",
+          result: {
+            proposal,
+            applied: false,
+            requires_manual_review: true,
+            message: "候选变更已生成，未写入正式股票池。",
           },
         });
-
-        send({ type: "result", result });
         controller.close();
       } catch (e) {
         send({ type: "error", message: e instanceof Error ? e.message : String(e) });

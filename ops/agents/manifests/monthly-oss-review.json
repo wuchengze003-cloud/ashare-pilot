@@ -1,0 +1,13 @@
+{
+  "id": "monthly-oss-review",
+  "agent": "gemini",
+  "mode": "read_only",
+  "prompt": "Review only official repositories for Qlib, LightGBM, Optuna, Evidently, RQAlpha, vn.py and tickflow-stock-panel. Identify releases that materially affect this project, license changes, breaking changes and reusable fixes. Do not edit files.",
+  "allowed_paths": [],
+  "forbidden_paths": ["web", "pyserver", "research", "ops"],
+  "input_data_cutoff": "official_repository_state_at_dispatch_time",
+  "expected_outputs": ["stdout component matrix", "stdout migration recommendation"],
+  "max_subagents": 0,
+  "timeout_seconds": 900,
+  "tests": []
+}

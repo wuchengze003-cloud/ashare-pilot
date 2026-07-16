@@ -414,3 +414,44 @@ test("rebalanceThresholdPct skips trades when current weight is close to target"
   const buysA = r.trades.filter((t) => t.side === "buy" && t.symbol === "A");
   assert.ok(buysA.length <= 2, `expected at most 2 buys of A due to drift threshold, got ${buysA.length}`);
 });
+
+test("point-in-time universe membership does not leak new stocks into old decisions", async () => {
+  const klines = makeKlines("2026-06-26", Array.from({ length: 10 }, () => 10));
+  const localDates = klines.map((k) => k.date);
+  const series: SymbolSeries[] = [
+    {
+      entry: { symbol: "OLD", name: "Old", theme: "Legacy", pool_tier: "watch", strategy_until: "2026-07-01" },
+      klines,
+    },
+    {
+      entry: { symbol: "NEW", name: "New", theme: "Current", pool_tier: "core", strategy_from: "2026-07-02" },
+      klines,
+    },
+    {
+      entry: { symbol: "OBS", name: "Watch", theme: "Watch", pool_tier: "watch" },
+      klines,
+    },
+  ];
+  const seen = new Map<string, string[]>();
+  const capture: Scorer = async (snapshots, { asOf }) => {
+    seen.set(asOf, snapshots.map((s) => s.symbol));
+    return snapshots.map((s) => ({
+      symbol: s.symbol,
+      action: "hold",
+      confidence: 0.5,
+      size: 0,
+      rationale: "test",
+    }));
+  };
+  await runBacktest(series, {
+    ...cfg,
+    startDate: localDates[0],
+    endDate: localDates.at(-1)!,
+    rebalanceEveryNDays: 1,
+    decisionEveryNDays: 1,
+  }, { scorer: capture });
+
+  assert.deepEqual(seen.get("2026-07-01"), ["OLD"]);
+  assert.deepEqual(seen.get("2026-07-02"), ["NEW"]);
+  assert.ok([...seen.values()].every((symbols) => !symbols.includes("OBS")));
+});

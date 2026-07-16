@@ -15,7 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { loadEntries } from "../lib/universe";
+import { loadActiveEntries } from "../lib/universe";
 import { mapPool } from "../lib/concurrent";
 import { writeRuntimeJson } from "../lib/runtimeData";
 
@@ -51,7 +51,7 @@ async function main() {
 
   const start = yyyymmdd(padStart);
   const end = requestedEnd.replaceAll("-", "");
-  const entries = loadEntries();
+  const entries = loadActiveEntries(requestedEnd);
   const symbols = [...new Set(["sh000300", ...entries.map((entry) => entry.symbol)])];
   const concurrency = Number(process.env.UPDATE_QUANT_CONCURRENCY ?? 3);
 
@@ -93,6 +93,45 @@ async function main() {
       error: error instanceof Error ? error.message : String(error),
     });
     console.warn("Analyst snapshot unavailable; wrote symbol-only runtime fallback");
+  }
+
+  execFileSync("npx", ["tsx", "scripts/build-dashboard.ts"], {
+    cwd: path.resolve(__dirname, ".."),
+    env: process.env,
+    stdio: "inherit",
+  });
+  const repoRoot = path.resolve(__dirname, "..", "..");
+  const researchRoot = path.join(repoRoot, "research");
+  const researchRuntime = path.resolve(
+    researchRoot,
+    process.env.RESEARCH_RUNTIME_DIR ?? "runtime",
+  );
+  execFileSync(
+    "uv",
+    [
+      "run",
+      "ashare-research",
+      "--runtime",
+      researchRuntime,
+      "export-v1-baseline",
+      "--backtest",
+      path.join(repoRoot, "web", "data", "runtime", "backtest.json"),
+      "--output-dir",
+      path.join(researchRuntime, "baselines", "v1"),
+    ],
+    { cwd: researchRoot, env: process.env, stdio: "inherit" },
+  );
+
+  try {
+    execFileSync("npx", ["tsx", "scripts/update-research-shadow.ts"], {
+      cwd: path.resolve(__dirname, ".."),
+      env: process.env,
+      stdio: "inherit",
+    });
+  } catch (error) {
+    // Shadow research cannot block the production V1 close pipeline. A stale
+    // snapshot will not attach because build-dashboard checks decision_date.
+    console.warn(`Shadow inference unavailable; V1 continues: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   execFileSync("npx", ["tsx", "scripts/build-dashboard.ts"], {

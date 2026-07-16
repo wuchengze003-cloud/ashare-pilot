@@ -35,6 +35,13 @@ function sideLabel(side: "buy" | "sell" | "reduce") {
   return "卖出";
 }
 
+function shadowActionLabel(action: "buy" | "hold" | "sell" | "cash") {
+  if (action === "buy") return "候选买入";
+  if (action === "sell") return "候选卖出";
+  if (action === "cash") return "持币";
+  return "候选持有";
+}
+
 export default function DashboardPage() {
   const data = loadDashboardData();
   const universe = loadEntries();
@@ -46,14 +53,6 @@ export default function DashboardPage() {
   const themeMap = new Map(universe.map((e) => [e.symbol, e.theme]));
   const currentPriceBySymbol = new Map((analyst?.items ?? []).map((item) => [item.symbol, item.current_price ?? null]));
   const currentAsOfBySymbol = new Map((analyst?.items ?? []).map((item) => [item.symbol, item.current_price_as_of ?? null]));
-
-  const equityData = data
-    ? data.equityCurve.map((b, i) => ({
-        date: b.date,
-        equity: b.equity,
-        benchmark: data.benchmarkCurve[i]?.equity ?? null,
-      }))
-    : [];
 
   const themeData = data
     ? data.themePerformance
@@ -92,6 +91,24 @@ export default function DashboardPage() {
   const latestEquity = latestBar?.equity ?? holdingsValue + latestCash;
   const cashWeight = latestEquity > 0 ? latestCash / latestEquity : 0;
   const snapshotLabel = data?.snapshot_label ?? "完整收盘";
+  const shadowModel = data?.latestPlan?.shadowModel;
+  const championModel = data?.latestPlan?.championModel;
+  const researchStatus = data?.researchStatus;
+  const latestAssessment = researchStatus?.promotion_assessments?.at(-1);
+  const fiveDayFeedback = researchStatus?.outcome_feedback?.summary?.groups
+    ?.filter((item) => item.horizon_bars === 5)
+    .at(-1);
+  const shadowEquityByDate = new Map(
+    (shadowModel?.shadow_account?.equity_curve ?? []).map((point) => [point.date, point.equity]),
+  );
+  const equityData = data
+    ? data.equityCurve.map((point, index) => ({
+        date: point.date,
+        equity: point.equity,
+        benchmark: data.benchmarkCurve[index]?.equity ?? null,
+        shadow: shadowEquityByDate.get(point.date) ?? null,
+      }))
+    : [];
   const decisionBasisLabel = data?.snapshot_basis === "intraday-midday" ? "午盘快照决策" : "收盘决策";
   const targetBuys = data?.latestPlan?.signals.filter((s) => s.action === "buy" && s.size > 0) ?? [];
   const signalMap = new Map((data?.latestPlan?.signals ?? []).map((s) => [s.symbol, s]));
@@ -204,7 +221,141 @@ export default function DashboardPage() {
             </div>
           )}
 
-          <h2 className="subheading">权益曲线 vs 沪深300</h2>
+          <h2 className="subheading">模型状态</h2>
+          <div className="theme-panel">
+            <div className="theme-title">
+              <strong>{championModel ? "ML 正式策略" : "V1 正式策略"} / ML 影子策略</strong>
+              <span>
+                {shadowModel
+                  ? `${shadowModel.model_version} · 影子，不参与交易`
+                  : championModel
+                    ? `${championModel.model_version} · 已通过晋级`
+                  : "尚无通过数据校验的 ML 预测"}
+              </span>
+            </div>
+            <div className="model-status-grid">
+              <span>
+                生产策略：{researchStatus?.production_strategy === "ml-champion" ? "ML 正式模型" : "V1 规则"}
+              </span>
+              <span>
+                候选模型：{researchStatus?.challenger_models?.length ?? 0}
+              </span>
+              <span>
+                公开基准：{researchStatus?.qlib_benchmark?.passed
+                  ? `${researchStatus.qlib_benchmark.data_cutoff} 可用，不可晋级`
+                  : "未就绪"}
+              </span>
+              {researchStatus?.qlib_benchmark?.results?.linear?.median_rank_ic != null ? (
+                <span>
+                  Alpha158 线性 6 折中位 RankIC：
+                  {researchStatus.qlib_benchmark.results.linear.median_rank_ic.toFixed(4)}
+                </span>
+              ) : null}
+              <span className={researchStatus?.tushare_production?.passed ? "pos" : "neg"}>
+                生产研究数据：{researchStatus?.tushare_production?.passed
+                  ? `通过 · ${researchStatus.tushare_production.data_cutoff ?? "截止日未知"} · ${researchStatus.tushare_production.trading_days ?? 0} 日`
+                  : "未通过"}
+              </span>
+              <span className={latestAssessment?.passed ? "pos" : "muted"}>
+                晋级状态：{researchStatus?.activation_pending
+                  ? `${researchStatus.activation_pending} 下一决策日生效`
+                  : latestAssessment?.status === "promoted"
+                    ? "已晋级"
+                    : latestAssessment?.status === "eligible"
+                      ? "符合门槛，待激活"
+                      : latestAssessment
+                        ? "影子验证中"
+                        : "暂无候选"}
+              </span>
+            </div>
+            {latestAssessment ? (
+              <div className="promotion-summary">
+                <span>
+                  影子样本 <strong>{latestAssessment.metrics?.shadow_trading_days ?? 0}</strong>/60 日
+                </span>
+                <span>
+                  完成交易 <strong>{latestAssessment.metrics?.closed_trades ?? 0}</strong>/20 笔
+                </span>
+                <span>
+                  验收 Sharpe <strong>{numberOrDash(latestAssessment.metrics?.primary_sharpe)}</strong>/3.00
+                </span>
+                <span>
+                  OOS 折数 <strong>{latestAssessment.metrics?.oos_folds ?? 0}</strong>/6
+                </span>
+                <span className={latestAssessment.failures?.length ? "neg" : "pos"}>
+                  {latestAssessment.failures?.length
+                    ? `未通过：${latestAssessment.failures.slice(0, 3).map((failure) => failure.code).join("、")}`
+                    : "全部晋级门槛通过"}
+                </span>
+                {researchStatus?.model_health ? (
+                  <span>
+                    冠军健康：连续跑输 {researchStatus.model_health.consecutive_underperform_days ?? 0}/10 日
+                    · 当前回撤 {pctOrDash(researchStatus.model_health.current_drawdown_pct)}
+                  </span>
+                ) : null}
+                {fiveDayFeedback ? (
+                  <span>
+                    5日奖惩：{fiveDayFeedback.observations ?? 0} 个样本
+                    · 超额命中 {pctOrDash((fiveDayFeedback.hit_rate ?? 0) * 100)}
+                    · 校准误差 {pctOrDash((fiveDayFeedback.mean_absolute_calibration_error ?? 0) * 100)}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+            {!shadowModel ? (
+              <p className="muted" style={{ padding: "12px 16px", margin: 0 }}>
+                {championModel
+                  ? `当前交易计划由 ${championModel.model_version} 生成，暂无新的影子挑战模型。`
+                  : "当前买卖、持仓和回测仍全部由 V1 规则生成。研究模型完成训练和影子验证后才会在此显示。"}
+              </p>
+            ) : (
+              <div className="table-wrap compact-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>排名</th>
+                      <th>代码</th>
+                      <th>名称</th>
+                      <th>影子动作</th>
+                      <th className="num">3日超额</th>
+                      <th className="num">下行风险</th>
+                      <th>主要驱动</th>
+                      <th className="num">目标仓位</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shadowModel.predictions.slice(0, 8).map((prediction) => (
+                      <tr key={`shadow-${prediction.symbol}`}>
+                        <td className="mono">{prediction.rank}</td>
+                        <td className="mono">{prediction.symbol}</td>
+                        <td>{nameMap.get(prediction.symbol) ?? "名称未收录"}</td>
+                        <td>{shadowActionLabel(prediction.action)}</td>
+                        <td className={`num ${(prediction.expectedReturns.d3 ?? 0) >= 0 ? "pos" : "neg"}`}>
+                          {prediction.expectedReturns.d3 == null ? "暂无" : pct(prediction.expectedReturns.d3 * 100)}
+                        </td>
+                        <td className="num neg">{pct(prediction.downsideRisk * 100)}</td>
+                        <td className="mono">
+                          {Object.entries(prediction.featureContributions ?? {})
+                            .slice(0, 2)
+                            .map(([name, value]) => `${name} ${pct(value * 100, 1)}`)
+                            .join(" · ") || "暂无"}
+                        </td>
+                        <td className="num">{pct(prediction.targetWeight * 100, 1)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="muted" style={{ padding: "10px 16px" }}>
+                  数据截止 {shadowModel.data_cutoff} · 特征 {shadowModel.feature_version}
+                  {shadowModel.quality?.warnings.length
+                    ? ` · 警告：${shadowModel.quality.warnings.join("；")}`
+                    : " · 数据质量与漂移检查通过"}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <h2 className="subheading">权益曲线对比</h2>
           <div className="card chart-card">
             <EquityChart data={equityData} />
           </div>

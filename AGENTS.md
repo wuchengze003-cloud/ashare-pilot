@@ -10,6 +10,8 @@ This repository contains a Chinese-market “silicon civilization consumer stock
 - `web/test/`: Node test-runner TypeScript tests named `*.test.ts`.
 - `web/data/universe.json`: editable stock universe data.
 - `pyserver/`: FastAPI sidecar for Tushare Pro access and SQLite market-data caching.
+- `research/`: isolated Python 3.11 Qlib/LightGBM research, append-only ledger, drift checks, and model registry.
+- `ops/agents/`: bounded Hermes, Gemini, and Claude job manifests plus worktree dispatcher.
 
 ## Build, Test, and Development Commands
 
@@ -20,7 +22,9 @@ This repository contains a Chinese-market “silicon civilization consumer stock
 - `cd web && npm test`: run TypeScript unit tests via `node --test --import tsx`.
 - `cd web && ./node_modules/.bin/tsc --noEmit`: type-check the frontend.
 - `cd web && npm run build`: create a production Next.js build.
-- Dashboard data build (agent-only): use the MCP kimi-datasource plugin to fetch daily prices and financial-index CSVs into `web/.cache/datasource/prices/` and `web/.cache/datasource/financials/`, then run `cd web && npx tsx scripts/build-dashboard.ts` to generate `web/data/dashboard-backtest.json`.
+- `cd research && uv sync --group dev`: install the locked Python 3.11 research environment.
+- `cd research && uv run pytest -q`: run research ledger, label, walk-forward, promotion, and rollback tests.
+- `python3 ops/agents/dispatch.py ops/agents/manifests/daily-data-quality.json`: run a bounded agent job.
 
 ## Coding Style & Naming Conventions
 
@@ -29,6 +33,16 @@ Use TypeScript for frontend and shared web logic. Prefer small helpers in `web/l
 ## Testing Guidelines
 
 Frontend tests use Node’s built-in test runner. Place tests in `web/test/` with names like `backtest.test.ts` and cover regression-prone logic in `web/lib/`, especially caching, concurrency, universe refresh, and backtest behavior. Run `npm test` and `tsc --noEmit` before submitting changes that touch the web app.
+
+Research tests use pytest. Every point-in-time label, promotion gate, registry mutation, drift guard, and symbol adapter needs a regression test. Never describe a candidate as active until the registry records a passed promotion.
+
+## Strategy and Agent Safety
+
+- `daily:close` may update data and run deterministic inference, but it must not train, tune, promote, or modify tracked files.
+- V1 remains the production fallback. Shadow predictions cannot change orders, holdings, or historical curves.
+- ML decisions use D-close features and D+1-open execution. The 2026 post-CNY window is final acceptance only, never parameter selection.
+- Agents may edit code only in isolated worktrees and only inside manifest `allowed_paths`. They may not edit `active_model.json`, production runtime, the universe, or deploy scripts.
+- Codex owns shared interfaces, execution semantics, final review, tests, and integration.
 
 ## Commit & Pull Request Guidelines
 

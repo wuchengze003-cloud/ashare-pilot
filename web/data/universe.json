@@ -1,665 +1,1092 @@
 {
-  "$schema_note": "硅基文明消费股 watchlist. Edit via UI or directly. Each entry: {symbol, name, theme, note?}.",
-  "updated_at": "2026-06-26",
-  "updated_by": "codex-note-cleanup",
+  "$schema_note": "硅基文明消费股分层股票池。pool_tier标识当前正式/观察层；strategy_from/strategy_until控制点时策略生效区间；previous_theme保留历史分类。",
+  "updated_at": "2026-07-02",
+  "updated_by": "codex-point-in-time-curation",
   "entries": [
     {
       "symbol": "688256",
       "name": "寒武纪",
       "theme": "算力/AI芯片",
       "note": "国产 AI 训练/推理芯片龙头",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "688041",
       "name": "海光信息",
       "theme": "算力/AI芯片",
       "note": "DCU + x86 CPU",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "688047",
       "name": "龙芯中科",
       "theme": "算力/AI芯片",
       "note": "自主指令集 CPU",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "watch",
+      "strategy_until": "2026-07-01",
+      "review_reason": "通用CPU与AI算力主线关联较弱，转观察"
     },
     {
       "symbol": "300474",
       "name": "景嘉微",
       "theme": "算力/AI芯片",
       "note": "国产 GPU",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "002049",
       "name": "紫光国微",
       "theme": "算力/AI芯片",
       "note": "特种 FPGA/SoC",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "watch",
+      "strategy_until": "2026-07-01",
+      "review_reason": "特种集成电路收入与AI基础设施关联缺少量化证据"
     },
     {
       "symbol": "688385",
       "name": "复旦微电",
       "theme": "算力/AI芯片",
       "note": "FPGA/MCU",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "300308",
       "name": "中际旭创",
       "theme": "光模块",
       "note": "全球 800G/1.6T 龙头",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "300502",
       "name": "新易盛",
       "theme": "光模块",
       "note": "800G 第二梯队",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "300394",
       "name": "天孚通信",
       "theme": "光模块",
       "note": "光器件，光模块板块联动",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "000988",
       "name": "华工科技",
       "theme": "光模块",
       "note": "光模块/激光",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "002281",
       "name": "光迅科技",
       "theme": "光模块",
       "note": "光器件+光模块",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "603083",
       "name": "剑桥科技",
       "theme": "光模块",
       "note": "光模块新势力",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "301205",
       "name": "联特科技",
       "theme": "光模块",
       "global_supply": true,
-      "note": "高速光模块，布局800G/1.6T"
+      "note": "高速光模块，布局800G/1.6T",
+      "pool_tier": "core"
     },
     {
       "symbol": "300620",
       "name": "光库科技",
       "theme": "光模块",
       "note": "铌酸锂调制器芯片及器件，薄膜铌酸锂光子集成",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "600330",
       "name": "天通股份",
-      "theme": "半导体材料",
+      "theme": "光模块",
       "note": "铌酸锂单晶/晶圆，上游关键原材料",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "半导体材料",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "002222",
       "name": "福晶科技",
       "theme": "光模块",
       "note": "铌酸锂等光学晶体材料",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "watch",
+      "strategy_until": "2026-07-01",
+      "review_reason": "光学晶体业务与数据中心光通信收入关联不足"
     },
     {
       "symbol": "601138",
       "name": "工业富联",
       "theme": "AI服务器",
       "note": "全球 AI 服务器/HPC 代工核心",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "000977",
       "name": "浪潮信息",
       "theme": "AI服务器",
       "note": "国内最大 AI 服务器厂商",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "603019",
       "name": "中科曙光",
       "theme": "AI服务器",
       "global_supply": false,
-      "note": "国产服务器与超算平台"
+      "note": "国产服务器与超算平台",
+      "pool_tier": "core"
     },
     {
       "symbol": "000938",
       "name": "紫光股份",
-      "theme": "AI服务器",
+      "theme": "数据中心网络",
       "note": "新华三",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "AI服务器",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "301018",
       "name": "申菱环境",
       "theme": "液冷",
       "note": "数据中心精密温控",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "300499",
       "name": "高澜股份",
       "theme": "液冷",
       "global_supply": false,
-      "note": "数据中心液冷设备"
+      "note": "数据中心液冷设备",
+      "pool_tier": "core"
     },
     {
       "symbol": "300602",
       "name": "飞荣达",
       "theme": "液冷",
       "note": "导热散热材料",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "watch",
+      "strategy_until": "2026-07-01",
+      "review_reason": "散热材料业务较分散，AIDC收入贡献尚未充分披露"
     },
     {
       "symbol": "600900",
       "name": "长江电力",
       "theme": "电力",
       "note": "稳定基荷水电",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "003816",
       "name": "中国广核",
       "theme": "电力",
       "note": "核电",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "600886",
       "name": "国投电力",
       "theme": "电力",
       "global_supply": false,
-      "note": "清洁电力，水火风光并济"
+      "note": "清洁电力，水火风光并济",
+      "pool_tier": "core"
     },
     {
       "symbol": "600011",
       "name": "华能国际",
       "theme": "电力",
       "note": "火电+新能源",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "300383",
       "name": "光环新网",
       "theme": "IDC",
       "global_supply": false,
-      "note": "IDC与云计算服务商"
+      "note": "IDC与云计算服务商",
+      "pool_tier": "core"
     },
     {
       "symbol": "603881",
       "name": "数据港",
       "theme": "IDC",
       "global_supply": false,
-      "note": "批发型IDC，服务云厂商"
+      "note": "批发型IDC，服务云厂商",
+      "pool_tier": "core"
     },
     {
       "symbol": "300738",
       "name": "奥飞数据",
       "theme": "IDC",
       "global_supply": false,
-      "note": "自建IDC，面向智算需求"
+      "note": "自建IDC，面向智算需求",
+      "pool_tier": "core"
     },
     {
       "symbol": "002335",
       "name": "科华数据",
-      "theme": "电力设备",
+      "theme": "数据中心电源",
       "note": "IDC + 数据中心电源",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "电力设备",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "603290",
       "name": "斯达半导",
-      "theme": "功率器件",
+      "theme": "功率半导体",
       "note": "IGBT 龙头",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "功率器件",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "688187",
       "name": "时代电气",
-      "theme": "功率器件",
+      "theme": "功率半导体",
       "note": "高压 IGBT/SiC",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "功率器件",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "688711",
       "name": "宏微科技",
-      "theme": "功率器件",
+      "theme": "功率半导体",
       "note": "IGBT/SiC 模块",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "功率器件",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "605111",
       "name": "新洁能",
-      "theme": "功率器件",
+      "theme": "功率半导体",
       "note": "MOSFET",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "功率器件",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "600460",
       "name": "士兰微",
-      "theme": "功率器件",
+      "theme": "功率半导体",
       "note": "IDM 功率器件",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "功率器件",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "688396",
       "name": "华润微",
-      "theme": "功率器件",
+      "theme": "功率半导体",
       "note": "IDM 功率/MEMS",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "功率器件",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "600745",
       "name": "闻泰科技",
-      "theme": "功率器件",
+      "theme": "功率半导体",
       "note": "安世 IGBT/MOSFET",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core",
+      "previous_theme": "功率器件",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "603986",
       "name": "兆易创新",
       "theme": "存储/HBM",
       "note": "NAND/DRAM/MCU 龙头",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "688008",
       "name": "澜起科技",
       "theme": "存储/HBM",
       "note": "DDR5/CXL 内存接口",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "300223",
       "name": "北京君正",
       "theme": "存储/HBM",
       "note": "车规存储+处理器",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "watch",
+      "strategy_until": "2026-07-01",
+      "review_reason": "主营偏车规存储与处理器，并非HBM或AI数据中心存储"
     },
     {
       "symbol": "301308",
       "name": "江波龙",
       "theme": "存储/HBM",
       "note": "存储模组",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "002156",
       "name": "通富微电",
-      "theme": "存储/HBM",
+      "theme": "先进封装/封测",
       "note": "AMD HBM 封测",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core",
+      "previous_theme": "存储/HBM",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "600584",
       "name": "长电科技",
-      "theme": "存储/HBM",
+      "theme": "先进封装/封测",
       "note": "封测龙头",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core",
+      "previous_theme": "存储/HBM",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "002185",
       "name": "华天科技",
-      "theme": "存储/HBM",
+      "theme": "先进封装/封测",
       "note": "封测",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core",
+      "previous_theme": "存储/HBM",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "002371",
       "name": "北方华创",
       "theme": "半导体设备",
       "note": "刻蚀/沉积/清洗龙头",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "688012",
       "name": "中微公司",
       "theme": "半导体设备",
       "note": "刻蚀机",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "688072",
       "name": "拓荆科技",
       "theme": "半导体设备",
       "note": "薄膜沉积",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "688126",
       "name": "沪硅产业",
       "theme": "半导体材料",
       "note": "12 寸硅片",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "300476",
       "name": "胜宏科技",
       "theme": "AI-PCB",
       "note": "NVIDIA GB200 PCB 主力",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "002463",
       "name": "沪电股份",
       "theme": "AI-PCB",
       "note": "AI 服务器主板",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "002916",
       "name": "深南电路",
       "theme": "AI-PCB",
       "note": "PCB 龙头",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "002938",
       "name": "鹏鼎控股",
       "theme": "AI-PCB",
       "note": "苹果链 + AI 服务器",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "600183",
       "name": "生益科技",
       "theme": "AI-PCB",
       "note": "高速覆铜板 (CCL)",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "002436",
       "name": "兴森科技",
       "theme": "AI-PCB",
       "global_supply": false,
-      "note": "PCB与IC载板国产化"
+      "note": "PCB与IC载板国产化",
+      "pool_tier": "core"
     },
     {
       "symbol": "688261",
       "name": "东微半导",
-      "theme": "功率器件",
+      "theme": "功率半导体",
       "note": "高压超级结MOSFET龙头",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "功率器件",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "688019",
       "name": "安集科技",
       "theme": "半导体材料",
       "note": "CMP抛光液龙头",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "002409",
       "name": "雅克科技",
       "theme": "半导体材料",
       "note": "前驱体/SOD材料平台",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "688981",
       "name": "中芯国际",
       "theme": "晶圆代工",
       "note": "大陆晶圆代工龙头",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "600941",
       "name": "中国移动",
       "theme": "云/AI基建",
       "note": "国内最大运营商，移动云和AI基础设施服务",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "601728",
       "name": "中国电信",
       "theme": "云/AI基建",
       "note": "天翼云稳居国内前三，支撑AI算力调度",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "688082",
       "name": "盛美上海",
       "theme": "半导体设备",
       "note": "清洗设备龙头，TSV电镀设备用于先进封装",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "300346",
       "name": "南大光电",
       "theme": "半导体材料",
       "note": "国内光刻胶领先，高纯电子特气用于先进制程",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "000021",
       "name": "深科技",
-      "theme": "存储/HBM",
+      "theme": "先进封装/封测",
       "note": "存储芯片封测服务商",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core",
+      "previous_theme": "存储/HBM",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "002475",
       "name": "立讯精密",
-      "theme": "AI服务器",
+      "theme": "高速铜连接",
       "note": "AI服务器与高速互连",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core",
+      "previous_theme": "AI服务器",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "688498",
       "name": "源杰科技",
       "theme": "光模块",
       "note": "光芯片龙头，为AI光模块提供激光器芯片",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "688120",
       "name": "华海清科",
       "theme": "半导体设备",
       "note": "CMP设备龙头，用于AI芯片先进制程和封装",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "688037",
       "name": "芯源微",
       "theme": "半导体设备",
       "note": "涂胶显影设备龙头，用于前道晶圆制造",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "600050",
       "name": "中国联通",
       "theme": "云/AI基建",
       "note": "三大运营商之一，提供AI算力网络和云服务",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "688347",
       "name": "华虹公司",
       "theme": "晶圆代工",
       "note": "特色工艺晶圆代工",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "688268",
       "name": "华特气体",
       "theme": "半导体材料",
       "note": "高纯特种气体龙头，供应台积电等全球先进制程",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "688234",
       "name": "天岳先进",
       "theme": "半导体材料",
       "note": "碳化硅衬底龙头，AI服务器功率器件关键材料",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "300655",
       "name": "晶瑞电材",
       "theme": "半导体材料",
       "note": "高纯化学试剂和光刻胶，用于AI芯片制造",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "002837",
       "name": "英维克",
       "theme": "液冷",
       "note": "数据中心温控与液冷",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "601985",
       "name": "中国核电",
       "theme": "电力",
       "note": "核电运营，稳定清洁电力",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "688676",
       "name": "金盘科技",
-      "theme": "电力设备",
+      "theme": "变压器/配电",
       "note": "干式变压器配套数据中心",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core",
+      "previous_theme": "电力设备",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "300693",
       "name": "盛弘股份",
-      "theme": "电力设备",
+      "theme": "数据中心电源",
       "note": "UPS与电能质量设备",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "电力设备",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "002364",
       "name": "中恒电气",
-      "theme": "电力设备",
+      "theme": "数据中心电源",
       "note": "HVDC电源配套数据中心",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "电力设备",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "002851",
       "name": "麦格米特",
-      "theme": "电力设备",
+      "theme": "数据中心电源",
       "note": "服务器电源与电源模块",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core",
+      "previous_theme": "电力设备",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "300491",
       "name": "通合科技",
-      "theme": "电力设备",
+      "theme": "数据中心电源",
       "note": "电源模块供应商，产品用于数据中心高压直流电源",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "watch",
+      "strategy_until": "2026-07-01",
+      "review_reason": "主营偏充换电电源，数据中心电源商业化证据不足",
+      "previous_theme": "电力设备",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "600563",
       "name": "法拉电子",
-      "theme": "功率器件",
+      "theme": "被动元件",
       "note": "薄膜电容用于电源链",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "功率器件",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "002138",
       "name": "顺络电子",
-      "theme": "功率器件",
+      "theme": "被动元件",
       "note": "电感器件配套AI服务器",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core",
+      "previous_theme": "功率器件",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "603678",
       "name": "火炬电子",
-      "theme": "功率器件",
+      "theme": "被动元件",
       "note": "MLCC与特种电容",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "watch",
+      "strategy_until": "2026-07-01",
+      "review_reason": "主营偏特种陶瓷电容，AI服务器收入贡献缺少证据",
+      "previous_theme": "功率器件",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "300475",
       "name": "香农芯创",
       "theme": "存储/HBM",
       "note": "SK海力士存储代理",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core"
     },
     {
       "symbol": "603228",
       "name": "景旺电子",
       "theme": "AI-PCB",
       "note": "高端PCB配套AI服务器",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "688205",
       "name": "德科立",
       "theme": "光模块",
       "note": "光模块与光放大器",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "000063",
       "name": "中兴通讯",
-      "theme": "AI服务器",
+      "theme": "数据中心网络",
       "note": "AI服务器与算力网络",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "AI服务器",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "600905",
       "name": "三峡能源",
       "theme": "电力",
       "note": "绿电龙头，为AI数据中心提供清洁能源",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "002518",
       "name": "科士达",
-      "theme": "电力设备",
+      "theme": "数据中心电源",
       "note": "数据中心UPS及精密空调龙头",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "电力设备",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "600089",
       "name": "特变电工",
-      "theme": "电力设备",
+      "theme": "变压器/配电",
       "note": "特高压/变压器龙头，配套AIDC供电",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "电力设备",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "300408",
       "name": "三环集团",
-      "theme": "功率器件",
+      "theme": "被动元件",
       "note": "MLCC与陶瓷封装",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core",
+      "previous_theme": "功率器件",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "600667",
       "name": "太极实业",
-      "theme": "存储/HBM",
+      "theme": "先进封装/封测",
       "note": "海太半导，SK海力士封测",
-      "global_supply": true
+      "global_supply": true,
+      "pool_tier": "core",
+      "previous_theme": "存储/HBM",
+      "theme_effective_from": "2026-07-02"
     },
     {
       "symbol": "300249",
       "name": "依米康",
       "theme": "液冷",
       "note": "数据中心精密温控龙头，提供液冷解决方案",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
     },
     {
       "symbol": "600845",
       "name": "宝信软件",
       "theme": "IDC",
       "note": "宝之云IDC龙头，提供AI算力基础设施",
-      "global_supply": false
+      "global_supply": false,
+      "pool_tier": "core"
+    },
+    {
+      "symbol": "301511",
+      "name": "德福科技",
+      "theme": "AI-PCB",
+      "note": "HVLP铜箔量产，配套高速覆铜板与AI服务器PCB",
+      "global_supply": true,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "688300",
+      "name": "联瑞新材",
+      "theme": "AI-PCB",
+      "note": "球形硅微粉用于高速覆铜板与先进封装",
+      "global_supply": false,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "688519",
+      "name": "南亚新材",
+      "theme": "AI-PCB",
+      "note": "高速低损耗覆铜板用于服务器与交换机",
+      "global_supply": false,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "300548",
+      "name": "长芯博创",
+      "theme": "光模块",
+      "note": "800G/1.6T光模块及高速铜缆",
+      "global_supply": true,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "688313",
+      "name": "仕佳光子",
+      "theme": "光模块",
+      "note": "800G AWG组件量产，布局1.6T与CPO",
+      "global_supply": true,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "300913",
+      "name": "兆龙互连",
+      "theme": "高速铜连接",
+      "note": "800G高速电缆量产，支持PCIe 5.0/6.0",
+      "global_supply": false,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "002130",
+      "name": "沃尔核材",
+      "theme": "高速铜连接",
+      "note": "224G高速通信线批量交付，布局448G",
+      "global_supply": false,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "688668",
+      "name": "鼎通科技",
+      "theme": "高速铜连接",
+      "note": "224G高速连接器量产，服务服务器与数据中心",
+      "global_supply": true,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "301165",
+      "name": "锐捷网络",
+      "theme": "数据中心网络",
+      "note": "数据中心400G/800G交换机与算力网络",
+      "global_supply": false,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "300442",
+      "name": "润泽科技",
+      "theme": "IDC",
+      "note": "AIDC园区运营商，提供高密度智算基础设施",
+      "global_supply": false,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "300870",
+      "name": "欧陆通",
+      "theme": "数据中心电源",
+      "note": "高功率服务器电源规模销售，覆盖GPU电源",
+      "global_supply": false,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "002922",
+      "name": "伊戈尔",
+      "theme": "变压器/配电",
+      "note": "数据中心变压器与800V直流供电系统",
+      "global_supply": false,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "300054",
+      "name": "鼎龙股份",
+      "theme": "半导体材料",
+      "note": "CMP抛光垫与抛光液进入主流晶圆厂",
+      "global_supply": false,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "300666",
+      "name": "江丰电子",
+      "theme": "半导体材料",
+      "note": "超高纯溅射靶材供应全球晶圆厂",
+      "global_supply": true,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "300604",
+      "name": "长川科技",
+      "theme": "半导体设备",
+      "note": "集成电路测试机与分选机国产龙头",
+      "global_supply": false,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "688200",
+      "name": "华峰测控",
+      "theme": "半导体设备",
+      "note": "半导体测试系统覆盖SoC与功率器件",
+      "global_supply": false,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "688525",
+      "name": "佰维存储",
+      "theme": "存储/HBM",
+      "note": "存储模组与先进封测服务AI端侧客户",
+      "global_supply": true,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-02"
+    },
+    {
+      "symbol": "300563",
+      "name": "神宇股份",
+      "theme": "高速铜连接",
+      "note": "高速数据线材具备算力互连潜力，收入归因待验证",
+      "global_supply": false,
+      "pool_tier": "watch",
+      "review_reason": "高速数据线材具备算力互连潜力，收入归因待验证"
+    },
+    {
+      "symbol": "300990",
+      "name": "同飞股份",
+      "theme": "液冷",
+      "note": "具备服务器液冷方案，相关收入占比尚未披露",
+      "global_supply": false,
+      "pool_tier": "watch",
+      "review_reason": "具备服务器液冷方案，相关收入占比尚未披露"
+    },
+    {
+      "symbol": "301291",
+      "name": "明阳电气",
+      "theme": "变压器/配电",
+      "note": "取得算力配电订单，持续性与收入占比待验证",
+      "global_supply": false,
+      "pool_tier": "watch",
+      "review_reason": "取得算力配电订单，持续性与收入占比待验证"
+    },
+    {
+      "symbol": "603186",
+      "name": "华正新材",
+      "theme": "AI-PCB",
+      "note": "高速覆铜板具备技术储备，AI业务规模待验证",
+      "global_supply": false,
+      "pool_tier": "watch",
+      "review_reason": "高速覆铜板具备技术储备，AI业务规模待验证"
+    },
+    {
+      "symbol": "605589",
+      "name": "圣泉集团",
+      "theme": "AI-PCB",
+      "note": "电子树脂可用于高速覆铜板，AI收入归因待验证",
+      "global_supply": false,
+      "pool_tier": "watch",
+      "review_reason": "电子树脂可用于高速覆铜板，AI收入归因待验证"
+    },
+    {
+      "symbol": "688143",
+      "name": "长盈通",
+      "theme": "光模块",
+      "note": "特种光纤技术较强，数据中心商业化证据不足",
+      "global_supply": false,
+      "pool_tier": "watch",
+      "review_reason": "特种光纤技术较强，数据中心商业化证据不足"
+    },
+    {
+      "symbol": "300757",
+      "name": "罗博特科",
+      "theme": "光模块",
+      "note": "光模块设备业务依赖整合，业绩兑现仍需观察",
+      "global_supply": false,
+      "pool_tier": "watch",
+      "review_reason": "光模块设备业务依赖整合，业绩兑现仍需观察"
+    },
+    {
+      "symbol": "688596",
+      "name": "正帆科技",
+      "theme": "半导体设备",
+      "note": "高纯工艺系统直接服务晶圆厂，但非AI专属需求",
+      "global_supply": false,
+      "pool_tier": "watch",
+      "review_reason": "高纯工艺系统直接服务晶圆厂，但非AI专属需求"
+    },
+    {
+      "symbol": "603256",
+      "name": "宏和科技",
+      "theme": "AI-PCB",
+      "note": "电子级玻纤布受益高速板升级，高端占比待验证",
+      "global_supply": false,
+      "pool_tier": "watch",
+      "review_reason": "电子级玻纤布受益高速板升级，高端占比待验证"
+    },
+    {
+      "symbol": "301217",
+      "name": "铜冠铜箔",
+      "theme": "AI-PCB",
+      "note": "电子铜箔具备升级潜力，HVLP量产证据待加强",
+      "global_supply": false,
+      "pool_tier": "watch",
+      "review_reason": "电子铜箔具备升级潜力，HVLP量产证据待加强"
+    },
+    {
+      "symbol": "688629",
+      "name": "华丰科技",
+      "theme": "高速铜连接",
+      "note": "高速连接器布局明确，规模交付仍需验证",
+      "global_supply": false,
+      "pool_tier": "watch",
+      "review_reason": "高速连接器布局明确，规模交付仍需验证"
+    },
+    {
+      "symbol": "300570",
+      "name": "太辰光",
+      "theme": "光模块",
+      "note": "光纤连接器受益数据中心扩容，订单归因待验证",
+      "global_supply": false,
+      "pool_tier": "watch",
+      "review_reason": "光纤连接器受益数据中心扩容，订单归因待验证"
     }
   ]
 }

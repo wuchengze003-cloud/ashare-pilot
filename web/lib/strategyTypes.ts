@@ -20,4 +20,9 @@ export interface Signal {
   confidence: number;
   size: number;
   rationale: string;
+  /** Optional explainability fields supplied by a promoted ML model. */
+  modelVersion?: string;
+  expectedReturns?: Partial<Record<"d1" | "d3" | "d5" | "d10", number>>;
+  downsideRisk?: number;
+  reasonCodes?: string[];
 }

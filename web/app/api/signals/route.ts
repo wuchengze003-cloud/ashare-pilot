@@ -6,7 +6,7 @@ import { fetchFundamental, fetchKlines, fetchSpot } from "@/lib/pyserver";
 import { readRuntimeJson } from "@/lib/runtimeData";
 import { toExecutableSignals } from "@/lib/signalPolicy";
 import type { SymbolSnapshot } from "@/lib/strategyTypes";
-import { loadEntries } from "@/lib/universe";
+import { loadActiveEntries } from "@/lib/universe";
 import { hasInternalApiAccess, internalApiDeniedResponse } from "@/lib/apiSecurity";
 
 export const runtime = "nodejs";
@@ -221,7 +221,7 @@ export async function GET(req: NextRequest) {
   const startDate = yyyymmdd(start);
   const endDate = asOf.replaceAll("-", "");
 
-  const universe = loadEntries();
+  const universe = loadActiveEntries(asOf);
   let skipped = 0;
   const spotSources: Record<string, number> = {};
   const spotTimes: string[] = [];

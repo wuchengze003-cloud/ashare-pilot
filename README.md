@@ -4,6 +4,9 @@
 
 系统目标不是维护静态快照，而是每天收盘后生成可复现的量化模拟仓和明日交易计划。
 
+当前正式交易策略仍为 V1 规则策略。`research/` 中的 ML 系统只运行候选模型和影子模型；
+模型未完成至少 60 个交易日、20 笔成交及全部样本外门槛前，不得替换 V1。
+
 ## 核心口径
 
 - `web/data/universe.json` 是唯一提交入库的股票池源文件。
@@ -21,10 +24,14 @@ flowchart LR
   py["FastAPI sidecar<br/>行情 / K 线 / 基本面 / 规则目标价"]
   runtime["web/data/runtime<br/>运行快照，不入库"]
   universe["web/data/universe.json<br/>股票池，入库"]
+  research["Python 3.11 research<br/>Qlib / LightGBM / Optuna / Evidently"]
+  ledger["append-only ledger<br/>预测 / 决策 / 成交 / 结果"]
 
   web -- HTTP --> py
   web --> runtime
   web --> universe
+  research --> ledger
+  research -- "正式/影子预测" --> runtime
 ```
 
 ## 数据职责
@@ -38,6 +45,9 @@ flowchart LR
 | `web/data/runtime/meta.json` | 生成时间、股票池数量等元信息 | 否 |
 | `pyserver/cache.db` | 原始行情、K 线、spot、fundamental、目标价缓存 | 否 |
 | `web/.cache/web.db` | DeepSeek 与接口临时缓存 | 否 |
+| `research/runtime/data` | 2018 年至今全 A 股分区 Parquet | 否 |
+| `research/runtime/ledger.db` | 追加式决策与结果账本 | 否 |
+| `research/runtime/registry` | 候选、正式与回滚模型状态 | 否 |
 
 ## 快速开始
 
@@ -102,6 +112,50 @@ PYSERVER_URL=http://localhost:8002 npm run dashboard:update
 
 运行刷新不应产生 Git 变更；如果需要改股票池，只修改并提交 `web/data/universe.json`。
 
+`dashboard:update` 可以运行已注册模型的确定性推理，但不训练、不调参、不晋级模型。
+正式模型和挑战模型分别写入 `champion-predictions.json` 和
+`challenger-predictions.json`；挑战模型只在 Dashboard 展示，不会生成成交计划。
+
+## ML 研究引擎
+
+```bash
+cd research
+uv sync --group dev
+uv run ashare-research health
+uv run ashare-research bootstrap-qlib
+uv run ashare-research qlib-data-health
+uv run ashare-research qlib-benchmark --model-type linear
+uv run ashare-research data-sync --start 2018-01-01 --end 2026-07-08
+uv run ashare-research run-challenger --model-type linear --optuna-trials 0
+uv run ashare-research run-challenger --model-type lightgbm --optuna-trials 20
+```
+
+研究引擎固定 Python 3.11，与 `pyserver` 隔离。它复用 Qlib `DatasetH`、
+LightGBM/DoubleEnsemble、Optuna、MLflow 和 Evidently，并使用 D 日收盘决策、
+D+1 开盘成交的 1/3/5/10 日标签。可晋级的特征版本是透明的
+`ashare-core-v3`；它使用扣费后截面超额收益作为学习标签，排除当时的 ST 和上市不足 60 个交易日样本，
+同时训练收益与下行风险模型。完整 Alpha158 作为独立挑战基准，不再用子集冒充 Alpha158。
+公开 Qlib 数据只用于验证特征、标签和模型管线，不能产生可晋级模型。
+可晋级模型必须来自通过质检的 Tushare 时点数据。
+
+模型晋级必须通过 `research/ashare_research/promotion.py` 的全部硬门槛。
+晋级证据包会绑定 OOS、冻结验收窗口、影子仓、冠军基线、数据质量和漂移报告的路径与 SHA-256；
+晋级时会重新计算指标，手工修改 JSON 不能降低门槛。
+每日推理前会自动回填 1/3/5/10 日结果，记录超额收益、MFE、MAE、机会成本和校准误差；
+候选不足 4 只时保留现金，不把少数标的强制摊到满仓。
+连续跑输 10 日、数据质量失败、特征漂移或回撤突破护栏时，
+健康检查会回滚到上一模型；无上一 ML 模型时直接回到 V1。
+
+## 多代理协作
+
+代理任务由 `ops/agents/manifests/*.json` 限定数据截止日、允许路径、禁止路径、
+产物和测试命令。可写任务一律使用独立 worktree，代理不能修改正式 runtime、
+`active_model.json`、股票池或部署脚本。
+
+```bash
+python3 ops/agents/dispatch.py ops/agents/manifests/daily-data-quality.json
+```
+
 ## API
 
 实时规则信号：
@@ -149,12 +203,19 @@ DEPLOY_HOST=root@47.77.231.22 NEXT_BASE_PATH=/a-share npm run deploy:server
 | 类型检查 | `cd web && ./node_modules/.bin/tsc --noEmit` |
 | 单元测试 | `cd web && npm test` |
 | 生产构建 | `cd web && npm run build` |
+| 研究引擎测试 | `cd research && uv run pytest -q` |
+| 研究引擎静态检查 | `cd research && uv run ruff check ashare_research tests` |
+| 公开 Qlib 数据健康检查 | `cd research && uv run ashare-research qlib-data-health` |
+| Alpha158 冷启动基准 | `cd research && uv run ashare-research qlib-benchmark --model-type linear` |
+| 生产特征漂移检查 | `cd research && uv run ashare-research drift` |
+| 生成并登记挑战模型 | `cd research && uv run ashare-research run-challenger --model-type lightgbm --optuna-trials 20` |
 | 部署服务器 | `cd web && DEPLOY_HOST=root@服务器IP NEXT_BASE_PATH=/a-share npm run deploy:server` |
 
 ## 安全与配置
 
 - 不提交 `.env`、`.env.local`、`cache.db`、`.cache/`、`.next/`、`node_modules/` 或 API key。
 - `TUSHARE_TOKEN` 只放在 `pyserver/.env`。
+- 使用官方 Tushare token 时应删除 `TUSHARE_HTTP_URL`；使用第三方代理时，token 与租户有效期由代理服务商管理。
 - `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`PYSERVER_URL` 只放在 `web/.env.local`。
 - `NEXT_PUBLIC_SITE_URL` 可用于设置站点 URL，默认本地地址。
 - `RUNTIME_DATA_DIR` 可覆盖 runtime 快照目录，默认 `web/data/runtime`。

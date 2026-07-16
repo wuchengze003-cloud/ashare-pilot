@@ -103,6 +103,13 @@ input, select { background: var(--field); color: var(--fg); border: 1px solid va
 .signal-reason { max-width: 360px; line-height: 1.45; }
 .subheading { margin-top: 22px; margin-bottom: 10px; }
 .chart-card { height: 320px; }
+.model-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0; border-bottom: 1px solid var(--border); }
+.model-status-grid > span { min-width: 0; padding: 10px 14px; border-right: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.45; }
+.model-status-grid > span:last-child { border-right: 0; }
+.promotion-summary { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+.promotion-summary strong { color: var(--fg); font-variant-numeric: tabular-nums; }
+.promotion-summary .neg { color: var(--danger); }
+.promotion-summary .pos { color: var(--accent); }
 .dashboard-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
 .dashboard-actions form { display: inline-flex; }
 .dashboard-actions .button { text-decoration: none; }

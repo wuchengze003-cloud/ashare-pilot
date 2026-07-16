@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { readRuntimeJson } from "@/lib/runtimeData";
 import { latestSignalDate, toExecutableSignals } from "@/lib/signalPolicy";
-import { readUniverse } from "@/lib/universe";
+import { activeEntriesAsOf, readUniverse } from "@/lib/universe";
 
 export const dynamic = "force-dynamic";
 
@@ -178,12 +178,19 @@ function generatedLine(
 
 export default function Home() {
   const universe = readUniverse() as UniverseSnapshot;
+  const today = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  const activeEntries = activeEntriesAsOf(universe.entries, today);
   const analyst = readRuntimeJson<AnalystSnapshot>("analyst.json") ?? { generated_at: "", items: [] };
   const backtest = readRuntimeJson<BacktestSnapshot>("backtest.json");
   const signalSnapshot = readRuntimeJson<SignalsSnapshot>("signals.json");
   const meta = readRuntimeJson<MetaSnapshot>("meta.json") ?? {
     generated_at: new Date(0).toISOString(),
-    universe_count: universe.entries.length,
+    universe_count: activeEntries.length,
   };
 
   if (!backtest || !signalSnapshot) {
@@ -194,7 +201,7 @@ export default function Home() {
             <div className="eyebrow">Dashboard 规则评分 · 本地运行数据</div>
             <h1>硅基文明消费股交易系统</h1>
             <p>
-              股票池已加载 {universe.entries.length} 只；当前尚未生成量化模拟仓和明日交易计划。
+              股票池已加载 {activeEntries.length} 只；当前尚未生成量化模拟仓和明日交易计划。
             </p>
             <p className="muted">股票池更新：{universe.updated_at}</p>
           </div>
@@ -214,12 +221,12 @@ export default function Home() {
 
   const analystBySymbol = new Map(analyst.items.map((a) => [a.symbol, a]));
   const signalBySymbol = new Map(signals.map((s) => [s.symbol, s]));
-  const themes = [...new Set(universe.entries.map((e) => e.theme))].sort();
+  const themes = [...new Set(activeEntries.map((e) => e.theme))].sort();
   const grouped = themes.map((theme) => ({
     theme,
-    entries: universe.entries.filter((e) => e.theme === theme),
+    entries: activeEntries.filter((e) => e.theme === theme),
   }));
-  const globalCount = universe.entries.filter((e) => e.global_supply).length;
+  const globalCount = activeEntries.filter((e) => e.global_supply).length;
   const targetItems = analyst.items.filter((a) => a.implied_target != null && a.target_price_source);
   const targetCount = targetItems.length;
   const upsideCount = targetItems.filter((a) => (a.upside_pct ?? 0) > 0).length;
@@ -230,7 +237,7 @@ export default function Home() {
   const meetsSharpeTarget = backtest.meetsSharpeTarget ?? backtest.stats.sharpe >= sharpeTarget;
   const decisionEveryNDays = backtest.config.decisionEveryNDays ?? backtest.config.rebalanceEveryNDays;
   const decisionCadenceLabel = decisionEveryNDays <= 1 ? "每日" : `每 ${decisionEveryNDays} 日`;
-  const orderedSignals = universe.entries
+  const orderedSignals = activeEntries
     .map((entry) => ({
       entry,
       signal: signalBySymbol.get(entry.symbol),
@@ -265,8 +272,8 @@ export default function Home() {
       </header>
 
       <div className="summary-grid">
-        <Metric label="股票池" value={`${universe.entries.length}`} sub={`${themes.length} 个子主题`} />
-        <Metric label="全球供应链" value={`${globalCount}`} sub={`${Math.round((globalCount / universe.entries.length) * 100)}% 覆盖`} />
+        <Metric label="股票池" value={`${activeEntries.length}`} sub={`${themes.length} 个子主题`} />
+        <Metric label="全球供应链" value={`${globalCount}`} sub={`${Math.round((globalCount / activeEntries.length) * 100)}% 覆盖`} />
         <Metric label="目标价覆盖" value={`${targetCount}`} sub={`${upsideCount} 只高于现价`} />
         <Metric label="明日计划" value={`${buys} 买 / ${sells} 卖`} sub={`信号日 ${signalDate ?? "未生成"}`} />
       </div>

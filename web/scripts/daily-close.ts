@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
-import { loadEntries } from "../lib/universe";
+import { loadActiveEntries } from "../lib/universe";
 import { buildSymbolSeriesFromPyserverCache } from "../lib/dashboardData";
 import {
   parseSymbolList,
@@ -285,7 +285,7 @@ async function main() {
     });
     runCommand(steps, "validate runtime consistency", "npm", ["run", "dashboard:validate"], { cwd: webRoot });
 
-    const universe = loadEntries();
+    const universe = loadActiveEntries(expectedDate);
     const pyserverCacheDb = path.resolve(webRoot, process.env.PYSERVER_CACHE_DB ?? "../pyserver/cache.db");
     const marketData = buildSymbolSeriesFromPyserverCache(universe, pyserverCacheDb);
     const benchmarkLatestDate = marketData.benchmark.at(-1)?.date;

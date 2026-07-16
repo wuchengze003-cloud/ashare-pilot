@@ -11,7 +11,7 @@ process.chdir(tmp);
 import type { Kline } from "../lib/pyserver";
 import { runBacktest, type BacktestConfig, type SymbolSeries } from "../lib/backtest";
 import { ruleBasedScorer } from "../lib/dashboardBacktest";
-import { buildLatestPlan, buildSnapshotsAsOf } from "../lib/latestPlan";
+import { buildLatestPlan, buildPromotedModelPlan, buildSnapshotsAsOf } from "../lib/latestPlan";
 import { toExecutableSignals } from "../lib/signalPolicy";
 
 function makeKlines(start: string, closes: number[]): Kline[] {
@@ -161,6 +161,36 @@ test("buildLatestPlan scores the latest complete close even without a next execu
   assert.equal(plan.decisionDate, decisionDate);
   assert.equal(plan.executionPrice, "next_open");
   assert.deepEqual(plan.signals.filter((s) => s.action === "buy").map((s) => s.symbol), ["A"]);
+});
+
+test("shadow model cannot replace V1 but champion snapshot can build orders", () => {
+  const snapshot = {
+    generated_at: "2026-07-08T11:15:00.000Z",
+    decision_date: "2026-07-08",
+    data_cutoff: "2026-07-08",
+    stage: "champion" as const,
+    model_version: "lgbm-001",
+    feature_version: "alpha158-core-v1",
+    source: "qlib" as const,
+    predictions: [
+      {
+        symbol: "A",
+        rank: 1,
+        score: 0.03,
+        expectedReturns: { d3: 0.04 },
+        downsideRisk: -0.02,
+        confidence: 0.8,
+        targetWeight: 0.5,
+        action: "buy" as const,
+        reasonCodes: ["POSITIVE_NET_UTILITY"],
+      },
+    ],
+  };
+  const plan = buildPromotedModelPlan(snapshot, 4);
+  assert.equal(plan.source, "qlib-promoted");
+  assert.equal(plan.signals[0].action, "buy");
+  assert.equal(plan.signals[0].modelVersion, "lgbm-001");
+  assert.throws(() => buildPromotedModelPlan({ ...snapshot, stage: "shadow" }, 4), /not champion/);
 });
 
 test("autoSellUnselected rotates portfolio to top-scoring names", async () => {

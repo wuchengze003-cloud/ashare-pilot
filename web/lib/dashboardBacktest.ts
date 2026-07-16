@@ -77,7 +77,9 @@ function avg(xs: number[]): number {
   return xs.reduce((a, b) => a + b, 0) / xs.length;
 }
 
-function themeTierScore(theme?: string): number {
+const CURATED_UNIVERSE_EFFECTIVE_DATE = "2026-07-02";
+
+function legacyThemeTierScore(theme?: string): number {
   const t = theme ?? "";
   if (/光模块|AI-PCB|PCB|覆铜板/.test(t)) return 1;
   if (/AI服务器|液冷|IDC|云|电力设备/.test(t)) return 0.82;
@@ -86,7 +88,16 @@ function themeTierScore(theme?: string): number {
   return 0.5;
 }
 
-function supplyChainChokeScore(s: SymbolSnapshot): number {
+function curatedThemeTierScore(theme?: string): number {
+  const t = theme ?? "";
+  if (/光模块|AI-PCB|高速铜连接|数据中心网络/.test(t)) return 1;
+  if (/AI服务器|液冷|IDC|云|数据中心电源|变压器\/配电/.test(t)) return 0.82;
+  if (/算力|AI芯片|存储|HBM|先进封装|半导体设备|晶圆代工|半导体材料/.test(t)) return 0.68;
+  if (/功率半导体|被动元件|电力/.test(t)) return 0.55;
+  return 0.5;
+}
+
+function legacySupplyChainChokeScore(s: SymbolSnapshot): number {
   const text = `${s.theme ?? ""} ${s.name ?? ""} ${s.note ?? ""}`;
   if (/光模块|光通信|光芯片|光纤|光器件|激光器|铌酸锂|InP/i.test(text)) return 1;
   if (/AI-PCB|PCB|覆铜板|CCL|PTFE|高速板/i.test(text)) return 1;
@@ -98,6 +109,23 @@ function supplyChainChokeScore(s: SymbolSnapshot): number {
   if (/MLCC|电容|电感|被动元件|磁性/i.test(text)) return 0.78;
   if (/HBM|存储|封测|先进封装/i.test(text)) return 0.68;
   if (/AI服务器|IDC|云|晶圆代工|算力/i.test(text)) return 0.6;
+  return 0.5;
+}
+
+function curatedSupplyChainChokeScore(s: SymbolSnapshot): number {
+  const text = `${s.theme ?? ""} ${s.name ?? ""} ${s.note ?? ""}`;
+  if (/光模块|光通信|光芯片|光纤|光器件|激光器|铌酸锂|InP/i.test(text)) return 1;
+  if (/AI-PCB|PCB|覆铜板|CCL|PTFE|高速板|HVLP|硅微粉/i.test(text)) return 1;
+  if (/高速铜连接|高速通信线|高速连接器|224G|DAC|AEC/i.test(text)) return 1;
+  if (/数据中心网络|交换机|算力网络/i.test(text)) return 0.92;
+  if (/液冷|温控|散热|冷板|精密空调/i.test(text)) return 0.9;
+  if (/变压器|电源|UPS|HVDC|配电|服务器电源/i.test(text)) return 0.86;
+  if (/特气|WF6|钨|镓|锗|碲|锑|铋|氟|稀土|铁氧体|碳化硅|靶材|CMP|半导体材料/i.test(text)) {
+    return 0.82;
+  }
+  if (/MLCC|电容|电感|被动元件|磁性/i.test(text)) return 0.78;
+  if (/HBM|存储|封测|先进封装|测试机/i.test(text)) return 0.68;
+  if (/AI服务器|IDC|AIDC|云|晶圆代工|算力/i.test(text)) return 0.6;
   return 0.5;
 }
 
@@ -134,7 +162,8 @@ export function ruleBasedScorer(options: RuleBasedScorerOptions = {}): Scorer {
   } = options;
   const totalWeight = priceWeight + themeWeight + volumeWeight + trendWeight;
 
-  return async (snapshots: SymbolSnapshot[], { asOf: _asOf }): Promise<Signal[]> => {
+  return async (snapshots: SymbolSnapshot[], { asOf }): Promise<Signal[]> => {
+    const usesCuratedUniverse = asOf >= CURATED_UNIVERSE_EFFECTIVE_DATE;
     const scored: ScoredStock[] = [];
     for (const s of snapshots) {
       const closes = s.closes;
@@ -192,7 +221,9 @@ export function ruleBasedScorer(options: RuleBasedScorerOptions = {}): Scorer {
         peg,
         riskBlocked: riskBlockedByFundamentals(s),
         globalSupply: s.global_supply === true,
-        chokeholdRaw: supplyChainChokeScore(s),
+        chokeholdRaw: usesCuratedUniverse
+          ? curatedSupplyChainChokeScore(s)
+          : legacySupplyChainChokeScore(s),
       });
     }
     if (scored.length === 0) return [];
@@ -220,7 +251,9 @@ export function ruleBasedScorer(options: RuleBasedScorerOptions = {}): Scorer {
     const tScores = scored.map(
       (s, i) =>
         0.5 * themeMomentumScores[i] +
-        0.2 * themeTierScore(s.theme) +
+        0.2 * (usesCuratedUniverse
+          ? curatedThemeTierScore(s.theme)
+          : legacyThemeTierScore(s.theme)) +
         0.2 * s.chokeholdRaw +
         0.1 * (s.globalSupply ? 1 : 0.5),
     );

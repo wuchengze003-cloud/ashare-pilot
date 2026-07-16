@@ -4,7 +4,11 @@
 import type { Kline } from "./pyserver";
 import type { SymbolSnapshot, Signal } from "./strategyTypes";
 import { ruleBasedScorer } from "./dashboardBacktest";
-import type { UniverseEntry } from "./universe";
+import {
+  isStrategyEntryAsOf,
+  resolveEntryAsOf,
+  type UniverseEntry,
+} from "./universe";
 
 export interface BacktestConfig {
   startCash: number;
@@ -243,19 +247,21 @@ export async function runBacktest(
           return [d, archivedSignals.map((s) => ({ ...s }))] as const;
         }
         const snapshots: SymbolSnapshot[] = series
+          .filter((s) => isStrategyEntryAsOf(s.entry, d))
           .map((s) => {
+            const entry = resolveEntryAsOf(s.entry, d);
             // Include D close: the decision is made after close, then executed
             // on the next trading day's open. Fundamentals are point-in-time:
             // the latest snapshot whose effective_date <= d.
             const upto = s.klines.filter((k) => k.date <= d);
             return {
-              symbol: s.entry.symbol,
-              name: s.entry.name,
-              theme: s.entry.theme,
-              note: s.entry.note,
+              symbol: entry.symbol,
+              name: entry.name,
+              theme: entry.theme,
+              note: entry.note,
               closes: upto.map((k) => k.close),
               volumes: upto.map((k) => k.volume),
-              global_supply: s.entry.global_supply ?? null,
+              global_supply: entry.global_supply ?? null,
               fundamental: latestFundamentalAsOf(s.fundamentals, d),
             };
           })

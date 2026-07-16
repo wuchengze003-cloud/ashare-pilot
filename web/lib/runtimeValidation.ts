@@ -143,6 +143,37 @@ export function validateRuntimeArtifacts(input: RuntimeValidationInput): Runtime
       message: `latestPlan.decisionDate=${latestPlan.decisionDate} latestDate=${latestDate}`,
     });
   }
+  for (const [kind, model] of [
+    ["SHADOW", latestPlan?.shadowModel],
+    ["CHAMPION", latestPlan?.championModel],
+  ] as const) {
+    if (!model || !latestPlan) continue;
+    if (model.decision_date !== latestPlan.decisionDate) {
+      issues.push({
+        code: `${kind}_MODEL_DATE_MISMATCH`,
+        message: `${kind.toLowerCase()}.decision_date=${model.decision_date} latestPlan.decisionDate=${latestPlan.decisionDate}`,
+      });
+    }
+    if (!model.model_version.trim() || !model.feature_version.trim()) {
+      issues.push({
+        code: `${kind}_MODEL_VERSION_MISSING`,
+        message: `${kind.toLowerCase()} model_version and feature_version are required`,
+      });
+    }
+    if (model.data_cutoff > model.decision_date) {
+      issues.push({
+        code: `${kind}_MODEL_FUTURE_DATA`,
+        message: `${kind.toLowerCase()}.data_cutoff=${model.data_cutoff} exceeds decision_date=${model.decision_date}`,
+      });
+    }
+    const symbols = model.predictions.map((prediction) => prediction.symbol);
+    if (new Set(symbols).size !== symbols.length) {
+      issues.push({
+        code: `${kind}_MODEL_DUPLICATE_SYMBOL`,
+        message: `${kind.toLowerCase()} predictions contain duplicate symbols`,
+      });
+    }
+  }
   if (latestBar && latestDate && latestBar.date !== latestDate) {
     issues.push({
       code: "LATEST_BAR_DATE_MISMATCH",
@@ -158,10 +189,17 @@ export function validateRuntimeArtifacts(input: RuntimeValidationInput): Runtime
         message: `signals.signal_date=${signals.signal_date} latestPlan.decisionDate=${latestPlan.decisionDate}`,
       });
     }
-    if (signals.latest_complete_date !== latestPlan.decisionDate) {
+    const expectedCompleteDate = backtest.snapshot_basis === "intraday-midday"
+      ? backtest.equityCurve
+          .map((bar) => bar.date)
+          .filter((date) => date < latestPlan.decisionDate)
+          .sort()
+          .at(-1)
+      : latestPlan.decisionDate;
+    if (signals.latest_complete_date !== expectedCompleteDate) {
       issues.push({
         code: "SIGNALS_COMPLETE_DATE_MISMATCH",
-        message: `signals.latest_complete_date=${signals.latest_complete_date} latestPlan.decisionDate=${latestPlan.decisionDate}`,
+        message: `signals.latest_complete_date=${signals.latest_complete_date} expected=${expectedCompleteDate}`,
       });
     }
     compareSignals(issues, "signals.json vs latestPlan", latestPlan.signals, signals.signals);

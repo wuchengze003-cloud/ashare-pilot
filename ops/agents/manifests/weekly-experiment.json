@@ -1,0 +1,13 @@
+{
+  "id": "weekly-experiment",
+  "agent": "hermes",
+  "mode": "worktree_code",
+  "prompt": "Run one bounded Qlib challenger experiment using existing point-in-time data. You may improve research experiment code and tests, but must not alter production signals. Report train, validation and purged out-of-sample metrics separately and disclose every failed gate.",
+  "allowed_paths": ["research"],
+  "forbidden_paths": ["web", "pyserver", "ops", "tickflow-stock-panel", "web/data/universe.json"],
+  "input_data_cutoff": "latest_validated_research_partition_before_dispatch",
+  "expected_outputs": ["research code and tests in isolated worktree", "train validation and purged OOS metrics", "failed promotion gates"],
+  "max_subagents": 3,
+  "timeout_seconds": 3600,
+  "tests": ["cd research && uv run pytest"]
+}

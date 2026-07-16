@@ -11,6 +11,7 @@
     "dashboard:build": "tsx scripts/build-dashboard.ts",
     "dashboard:update": "tsx scripts/update-quant-dashboard.ts",
     "dashboard:validate": "tsx scripts/validate-runtime-data.ts",
+    "research:update": "tsx scripts/update-research-shadow.ts",
     "daily:close": "tsx scripts/daily-close.ts",
     "deploy:server": "tsx scripts/deploy-a-share-server.ts"
   },

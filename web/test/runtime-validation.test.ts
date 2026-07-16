@@ -102,6 +102,22 @@ test("runtime validation accepts archived signals that match simulated trades", 
   assert.deepEqual(issues, []);
 });
 
+test("runtime validation keeps intraday signal date separate from latest complete date", () => {
+  const issues = validateRuntimeArtifacts({
+    backtest: backtest({ snapshot_basis: "intraday-midday" }),
+    signals: {
+      signal_date: "2026-06-26",
+      latest_complete_date: "2026-06-25",
+      universe_count: 2,
+      signals: latestSignals,
+    },
+    meta: { universe_count: 2 },
+    histories: [history("2026-06-24", archivedSignals), history("2026-06-26", latestSignals)],
+  });
+
+  assert.deepEqual(issues, []);
+});
+
 test("runtime validation rejects historical signal drift", () => {
   const driftedSignals: Signal[] = [
     { symbol: "A", action: "hold", confidence: 0.8, size: 0, rationale: "drifted" },
@@ -153,4 +169,35 @@ test("runtime validation rejects buys that were not in the archived plan", () =>
   });
 
   assert.ok(issues.some((issue) => issue.code === "BUY_WITHOUT_ARCHIVED_SIGNAL"));
+});
+
+test("runtime validation rejects shadow predictions with future data", () => {
+  const base = backtest();
+  const issues = validateRuntimeArtifacts({
+    backtest: backtest({
+      latestPlan: {
+        ...base.latestPlan!,
+        shadowModel: {
+          generated_at: "2026-06-26T10:00:00.000Z",
+          decision_date: "2026-06-26",
+          data_cutoff: "2026-06-27",
+          stage: "shadow",
+          model_version: "lgbm-001",
+          feature_version: "alpha-v1",
+          source: "qlib",
+          predictions: [],
+        },
+      },
+    }),
+    signals: {
+      signal_date: "2026-06-26",
+      latest_complete_date: "2026-06-26",
+      universe_count: 2,
+      signals: latestSignals,
+    },
+    meta: { universe_count: 2 },
+    histories: [history("2026-06-24", archivedSignals), history("2026-06-26", latestSignals)],
+  });
+
+  assert.ok(issues.some((issue) => issue.code === "SHADOW_MODEL_FUTURE_DATA"));
 });

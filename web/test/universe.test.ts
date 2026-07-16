@@ -26,12 +26,16 @@ process.chdir(tmp);
 let readUniverse: typeof import("../lib/universe").readUniverse;
 let writeUniverse: typeof import("../lib/universe").writeUniverse;
 let loadEntries: typeof import("../lib/universe").loadEntries;
+let activeEntriesAsOf: typeof import("../lib/universe").activeEntriesAsOf;
+let resolveEntryAsOf: typeof import("../lib/universe").resolveEntryAsOf;
 
 before(async () => {
   const mod = await import("../lib/universe");
   readUniverse = mod.readUniverse;
   writeUniverse = mod.writeUniverse;
   loadEntries = mod.loadEntries;
+  activeEntriesAsOf = mod.activeEntriesAsOf;
+  resolveEntryAsOf = mod.resolveEntryAsOf;
 });
 
 after(() => {
@@ -55,6 +59,28 @@ test("global_supply is honored", () => {
   const entries = loadEntries();
   const globals = entries.filter((e) => e.global_supply);
   assert.equal(globals.length, 2);
+});
+
+test("point-in-time membership keeps historical backtests stable", () => {
+  const entries = [
+    { symbol: "OLD", name: "old", theme: "旧主题", pool_tier: "watch" as const, strategy_until: "2026-07-01" },
+    { symbol: "NEW", name: "new", theme: "新主题", pool_tier: "core" as const, strategy_from: "2026-07-02" },
+    { symbol: "OBS", name: "watch", theme: "观察", pool_tier: "watch" as const },
+  ];
+  assert.deepEqual(activeEntriesAsOf(entries, "2026-07-01").map((e) => e.symbol), ["OLD"]);
+  assert.deepEqual(activeEntriesAsOf(entries, "2026-07-02").map((e) => e.symbol), ["NEW"]);
+});
+
+test("theme changes only on their effective date", () => {
+  const entry = {
+    symbol: "A",
+    name: "a",
+    theme: "数据中心电源",
+    previous_theme: "电力设备",
+    theme_effective_from: "2026-07-02",
+  };
+  assert.equal(resolveEntryAsOf(entry, "2026-07-01").theme, "电力设备");
+  assert.equal(resolveEntryAsOf(entry, "2026-07-02").theme, "数据中心电源");
 });
 
 test("writeUniverse round-trips", () => {

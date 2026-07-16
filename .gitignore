@@ -16,7 +16,16 @@ pyserver/cache.db*
 web/.cache/
 web/data/dashboard-backtest.json
 web/data/runtime/*.json
+web/data/runtime/**/*.json
 web/data/runtime/signals-history/*.json
 !web/data/runtime/.gitkeep
 !web/data/runtime/signals-history/.gitkeep
+!web/data/runtime/**/.gitkeep
 /.claude/
+/.playwright-cli/
+/research/runtime/
+/research/mlruns/
+/research/Users/
+!/research/runtime/.gitkeep
+/ops/agents/runtime/
+/.agent-worktrees/

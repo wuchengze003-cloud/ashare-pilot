@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { loadEntries } from "@/lib/universe";
+import { loadStrategyEntries } from "@/lib/universe";
 import { fetchKlines, type Kline } from "@/lib/pyserver";
 import { runBacktest, type BacktestConfig, type SymbolSeries } from "@/lib/backtest";
 import { mapPool } from "@/lib/concurrent";
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
       };
       try {
-        const universe = loadEntries();
+        const universe = loadStrategyEntries();
         send({ type: "progress", phase: "loading", done: 0, total: universe.length });
         let loaded = 0;
         let failed = 0;
