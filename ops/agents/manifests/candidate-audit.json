@@ -7,6 +7,7 @@
   "forbidden_paths": ["web/data/universe.json", "web/data/runtime", "research/runtime/registry", "web/lib", "pyserver"],
   "input_data_cutoff": "candidate_manifest_data_cutoff",
   "expected_outputs": ["stdout APPROVE_FOR_SHADOW or REJECT", "stdout bias and cost audit"],
+  "required_verdict": "APPROVE_FOR_SHADOW",
   "max_subagents": 0,
   "timeout_seconds": 900,
   "tests": []

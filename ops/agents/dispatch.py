@@ -109,6 +109,8 @@ def load_manifest(path: Path) -> dict[str, Any]:
         raise ValueError("mode must be read_only or worktree_code")
     if int(manifest.get("max_subagents", 0)) > 3:
         raise ValueError("max_subagents cannot exceed 3")
+    if "required_verdict" in manifest and not str(manifest["required_verdict"]).strip():
+        raise ValueError("required_verdict cannot be blank")
     return manifest
 
 
@@ -180,11 +182,29 @@ def dispatch(manifest_path: Path) -> dict[str, Any]:
                 "stderr": test.stderr[-4000:],
             })
 
+    required_verdict = manifest.get("required_verdict")
+    first_line = next(
+        (line.strip() for line in process.stdout.splitlines() if line.strip()),
+        "",
+    )
+    verdict_passed = (
+        required_verdict is None
+        or first_line.upper().startswith(str(required_verdict).strip().upper())
+    )
+
     result = {
         "id": manifest["id"],
         "agent": manifest["agent"],
         "mode": manifest["mode"],
-        "status": "passed" if process.returncode == 0 and all(t["returncode"] == 0 for t in tests) else "failed",
+        "status": (
+            "passed"
+            if process.returncode == 0
+            and all(t["returncode"] == 0 for t in tests)
+            and verdict_passed
+            else "failed"
+        ),
+        "required_verdict": required_verdict,
+        "agent_verdict": first_line,
         "branch": branch,
         "worktree": str(worktree) if worktree else None,
         "changed_paths": changed,

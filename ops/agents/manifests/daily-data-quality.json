@@ -2,11 +2,12 @@
   "id": "daily-data-quality",
   "agent": "hermes",
   "mode": "read_only",
-  "prompt": "Inspect the latest A-share runtime data and research data health. Verify exact dates, missing symbols, duplicate rows, future-dated records and failed data sources. Do not propose trades and do not edit files. Return a PASS or FAIL verdict with exact evidence.",
+  "prompt": "Inspect only this project's authoritative web/data/runtime snapshots, pyserver/cache.db health, research/runtime data coverage and model status. Do not inspect tickflow-stock-panel or treat any reference project as a production source. Verify exact dates, expected inactive/watch symbols, duplicate rows, future-dated records and failed production data sources. Do not propose trades and do not edit files. The first non-empty output line must be exactly PASS or FAIL, followed by exact evidence.",
   "allowed_paths": [],
   "forbidden_paths": ["web/data/universe.json", "web/data/runtime", "research/runtime", "web/lib", "pyserver"],
   "input_data_cutoff": "latest_complete_date_from_web_runtime_meta",
   "expected_outputs": ["stdout PASS_OR_FAIL with exact dates and failed checks"],
+  "required_verdict": "PASS",
   "max_subagents": 0,
   "timeout_seconds": 600,
   "tests": []
