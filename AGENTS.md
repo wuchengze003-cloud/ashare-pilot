@@ -12,6 +12,10 @@ This repository contains a Chinese-market “silicon civilization consumer stock
 - `pyserver/`: FastAPI sidecar for Tushare Pro access and SQLite market-data caching.
 - `research/`: isolated Python 3.11 Qlib/LightGBM research, append-only ledger, drift checks, and model registry.
 - `ops/agents/`: bounded Hermes, Gemini, and Claude job manifests plus worktree dispatcher.
+- `ops/analytics/`: self-hosted Umami analytics, Nginx rate-limit configs, and runtime Dockerfile.
+- `tickflow-stock-panel/`: standalone stock panel sub-project with FastAPI backend, React frontend, and Docker packaging.
+- `monitoring/`: buy-watch monitoring scripts and daily state-check utilities.
+- `reports/`: dated research reports, data benchmarks, and strategy run outputs.
 
 ## Build, Test, and Development Commands
 
