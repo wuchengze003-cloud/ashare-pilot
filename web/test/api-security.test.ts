@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  hasConfiguredTokenAccess,
   hasInternalApiAccess,
   isAshareSymbol,
+  isIsoDateString,
   parseAshareSymbols,
 } from "../lib/apiSecurity";
 
@@ -32,4 +34,23 @@ test("internal API token is required in production and compared exactly", () => 
     hasInternalApiAccess(new Headers({ "x-internal-api-token": "wrong" }), "correct", "production"),
     false,
   );
+});
+
+test("hasConfiguredTokenAccess fails closed and matches exactly", () => {
+  assert.equal(hasConfiguredTokenAccess(null, "secret"), false);
+  assert.equal(hasConfiguredTokenAccess("secret", undefined), false);
+  assert.equal(hasConfiguredTokenAccess("secret", "secret"), true);
+  assert.equal(hasConfiguredTokenAccess("Secret", "secret"), false);
+  assert.equal(hasConfiguredTokenAccess("secret2", "secret"), false);
+  assert.equal(hasConfiguredTokenAccess("sec", "secret"), false);
+});
+
+test("isIsoDateString rejects malformed and impossible dates", () => {
+  assert.equal(isIsoDateString("2026-07-23"), true);
+  assert.equal(isIsoDateString("2026-02-30"), false);
+  assert.equal(isIsoDateString("2026-13-01"), false);
+  assert.equal(isIsoDateString("20260723"), false);
+  assert.equal(isIsoDateString("2026-7-23"), false);
+  assert.equal(isIsoDateString("../../etc/passwd"), false);
+  assert.equal(isIsoDateString(""), false);
 });

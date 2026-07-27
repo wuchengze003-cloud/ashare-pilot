@@ -13,7 +13,13 @@ export async function mapPool<T, R>(
       results[i] = await fn(items[i], i);
     }
   }
-  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);
+  // Clamp to >= 1: a zero/negative/NaN limit would otherwise spawn no workers
+  // and silently resolve to an array of `undefined` (Array.from length NaN -> 0).
+  const workerCount = Math.max(
+    1,
+    Math.min(Number.isFinite(limit) ? Math.floor(limit) : 1, items.length),
+  );
+  const workers = Array.from({ length: workerCount }, worker);
   await Promise.all(workers);
   return results;
 }

@@ -51,6 +51,25 @@ function sameSecret(left: string, right: string): boolean {
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
+/** Timing-safe check of a caller-provided token against a configured secret.
+ *  Fails closed when the secret is not configured. */
+export function hasConfiguredTokenAccess(
+  provided: string | null,
+  configuredToken: string | undefined,
+): boolean {
+  if (!configuredToken) return false;
+  return Boolean(provided && sameSecret(provided, configuredToken));
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Strict YYYY-MM-DD check that also rejects impossible dates like 2026-02-30. */
+export function isIsoDateString(value: string): boolean {
+  if (!ISO_DATE.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
 export function hasInternalApiAccess(
   headers: Headers,
   configuredToken = process.env.INTERNAL_API_TOKEN,
