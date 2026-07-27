@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import polars as pl
+
+DEFAULT_FEATURE_MISSING_RATE_LIMITS = {
+    # Tushare leaves pe_ttm null for loss-making companies. Across the
+    # point-in-time A-share panel this structural absence is stable at
+    # roughly 24.7%-28.3%, so PE gets an explicit limit without weakening
+    # the 25% default applied to every other feature.
+    "log_pe_ttm": 0.30,
+}
 
 
 @dataclass(frozen=True)
@@ -16,6 +25,7 @@ class DataQualityResult:
     duplicate_keys: int
     future_rows: int
     missing_feature_rates: dict[str, float]
+    missing_feature_limits: dict[str, float]
     failures: tuple[str, ...]
 
 
@@ -24,26 +34,51 @@ def validate_feature_panel(
     feature_names: list[str],
     decision_date: str | None = None,
     max_missing_rate: float = 0.25,
+    feature_missing_rate_limits: Mapping[str, float] | None = None,
 ) -> DataQualityResult:
+    if not 0 <= max_missing_rate <= 1:
+        raise ValueError("max_missing_rate must be between 0 and 1")
+    configured_limits = dict(DEFAULT_FEATURE_MISSING_RATE_LIMITS)
+    if feature_missing_rate_limits is not None:
+        configured_limits.update(feature_missing_rate_limits)
+    limits = {
+        name: float(configured_limits.get(name, max_missing_rate))
+        for name in feature_names
+    }
+    if any(not 0 <= limit <= 1 for limit in limits.values()):
+        raise ValueError("feature missing-rate limits must be between 0 and 1")
+
     duplicate_keys = panel.select(pl.struct("date", "symbol").is_duplicated().sum()).item()
     future_rows = 0
     if decision_date is not None:
         future_rows = panel.filter(
             pl.col("date") > pl.lit(decision_date).str.strptime(pl.Date, "%Y-%m-%d")
         ).height
-    missing = {
-        name: float(panel[name].is_null().sum() / max(panel.height, 1)) for name in feature_names
-    }
+    missing: dict[str, float] = {}
+    for name in feature_names:
+        values = panel[name].cast(pl.Float64, strict=False)
+        missing_count = int(values.is_null().sum()) + int(
+            values.is_nan().fill_null(False).sum()
+        )
+        missing[name] = float(missing_count / max(panel.height, 1))
     failures = []
     if duplicate_keys:
         failures.append(f"duplicate date/symbol keys: {duplicate_keys}")
     if future_rows:
         failures.append(f"rows after decision date: {future_rows}")
-    excessive = [name for name, rate in missing.items() if rate > max_missing_rate]
+    excessive = [
+        name for name, rate in missing.items() if rate > limits[name]
+    ]
     if excessive:
         failures.append(f"features above missing threshold: {','.join(excessive)}")
     return DataQualityResult(
-        not failures, panel.height, duplicate_keys, future_rows, missing, tuple(failures)
+        passed=not failures,
+        rows=panel.height,
+        duplicate_keys=duplicate_keys,
+        future_rows=future_rows,
+        missing_feature_rates=missing,
+        missing_feature_limits=limits,
+        failures=tuple(failures),
     )
 
 

@@ -7,6 +7,7 @@
 | 端点 | TTL | 数据源 |
 |---|---|---|
 | `GET /klines` | 直到下一个 15:30 A 股收盘 | A 股优先 easy-tdx 通达信日 K，覆盖不足回退 `ts.pro_bar(adj='qfq')`；港股 `ak.stock_hk_hist` |
+| `GET /minute-klines` | 历史日期 30 天；当日查询 5 分钟 | Tushare `stk_mins` 历史分钟 K；明确标记 `realtime: false` |
 | `GET /fundamental` | 30 秒到 24 小时 | A 股优先 AkShare 东方财富全市场快照；缺字段回退 `pro.daily_basic` |
 | `GET /analyst` | 由底层 spot/K 线缓存决定 | 实时价 + 15-30 日 ATR/动量/前高规则测算目标价；不请求研报、新闻或 LLM |
 | `GET /analysts` | 由底层 spot/K 线缓存决定 | 批量包装 `GET /analyst`，避免前端逐行请求 |
@@ -19,6 +20,9 @@
 
 ```
 TUSHARE_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# 使用兼容 Tushare JSON/SDK 的代理时再填写；官方端点应留空
+TUSHARE_HTTP_URL=https://your-tushare-compatible-endpoint.example
 ```
 
 启动时通过 `python-dotenv` 自动加载。
@@ -60,6 +64,9 @@ curl http://localhost:8001/health
 # 日 K（前复权）
 curl 'http://localhost:8001/klines?symbol=688256&start=20240101'
 
+# 历史 1 分钟 K（未复权；成交量单位为股，成交额单位为元）
+curl 'http://localhost:8001/minute-klines?symbol=000001&start=20260723&freq=1min'
+
 # 基本面（PE/PB/市值，24h 缓存）
 curl 'http://localhost:8001/fundamental?symbol=300476'
 
@@ -75,6 +82,11 @@ curl 'http://localhost:8001/spot?symbol=hk00700'
 # 批量最新价/最近收盘，前端股票池表格使用这个接口
 curl 'http://localhost:8001/spots?symbols=300476,601138,688256'
 ```
+
+`/minute-klines` 支持 `1min`、`5min`、`15min`、`30min`、`60min`。`start`
+和 `end` 可用 `YYYYMMDD`、`YYYY-MM-DD` 或 `YYYY-MM-DD HH:MM:SS`，单次范围
+最多 31 个自然日，以保证返回量不超过 `stk_mins` 单次 8000 行限制。该端点是历史
+分钟数据，不承担盘中实时盯盘；实时价继续使用 `/spot`。
 
 ## 代码符号规则
 

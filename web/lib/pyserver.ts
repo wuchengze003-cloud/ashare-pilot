@@ -57,8 +57,19 @@ async function get<T>(path: string, params: Record<string, string>): Promise<T> 
     const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
     try {
       const r = await fetch(`${BASE}${path}?${qs}`, { cache: "no-store", signal: ctrl.signal });
-      if (!r.ok) throw new Error(`pyserver ${path} ${r.status}: ${await r.text()}`);
+      if (!r.ok) {
+        const body = await r.text();
+        console.error("[pyserver] HTTP request failed", { path, status: r.status, params, body: body.slice(0, 200) });
+        throw new Error(`pyserver ${path} ${r.status}: ${body}`);
+      }
       return (await r.json()) as T;
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        console.error("[pyserver] request timed out", { path, params, timeoutMs: TIMEOUT_MS });
+      } else if (!(err instanceof Error && err.message.startsWith("pyserver "))) {
+        console.error("[pyserver] request error", { path, params, error: err instanceof Error ? err.message : String(err) });
+      }
+      throw err;
     } finally {
       clearTimeout(timer);
     }

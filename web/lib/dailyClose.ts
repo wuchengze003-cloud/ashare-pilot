@@ -14,8 +14,10 @@ export interface AnalystCoverageItem {
 export interface DailyCloseValidationInput {
   expectedDate: string;
   expectedUniverseCount: number;
+  expectedSymbols?: string[];
   benchmarkLatestDate?: string;
   series: MarketSeriesCoverage[];
+  allowedMissingSeriesSymbols?: string[];
   allowedStaleSymbols?: string[];
   backtest: RuntimeBacktestSnapshot | null;
   signals: RuntimeSignalsSnapshot | null;
@@ -57,6 +59,7 @@ export function parseSymbolList(value?: string): string[] {
 export function validateDailyCloseData(input: DailyCloseValidationInput): DailyCloseValidationIssue[] {
   const issues: DailyCloseValidationIssue[] = [];
   const allowedStale = new Set(input.allowedStaleSymbols ?? []);
+  const allowedMissingSeries = new Set(input.allowedMissingSeriesSymbols ?? []);
 
   if (input.benchmarkLatestDate !== input.expectedDate) {
     issues.push({
@@ -65,10 +68,21 @@ export function validateDailyCloseData(input: DailyCloseValidationInput): DailyC
     });
   }
 
-  if (input.series.length !== input.expectedUniverseCount) {
+  if (input.expectedSymbols) {
+    const availableSymbols = new Set(input.series.map((item) => item.symbol));
+    const missingSymbols = input.expectedSymbols.filter(
+      (symbol) => !availableSymbols.has(symbol) && !allowedMissingSeries.has(symbol),
+    );
+    if (missingSymbols.length > 0) {
+      issues.push({
+        code: "MISSING_PRICE_SERIES",
+        message: missingSymbols.join(","),
+      });
+    }
+  } else if (input.series.length !== input.expectedUniverseCount - allowedMissingSeries.size) {
     issues.push({
       code: "SERIES_COUNT_MISMATCH",
-      message: `price series=${input.series.length}, universe=${input.expectedUniverseCount}`,
+      message: `price series=${input.series.length}, expected=${input.expectedUniverseCount - allowedMissingSeries.size}`,
     });
   }
   const staleSeries = input.series.filter(

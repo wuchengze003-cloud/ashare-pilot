@@ -34,12 +34,22 @@ from .ledger import (
     read_predictions,
     summarize_outcomes,
 )
+from .minute_data import (
+    load_daily_volume_map,
+    load_suspended_map,
+    load_trading_dates,
+    probe_minute_data,
+    sync_minute_data,
+)
+from .minute_quality import run_minute_quality
 from .monitoring import ModelHealth, rollback_reasons
 from .portfolio import PortfolioConfig
 from .promotion import evaluate_promotion
 from .qlib_benchmark import run_alpha158_benchmark
 from .qlib_bootstrap import bootstrap_qlib_dataset, validate_qlib_dataset
 from .quality import run_evidently_drift, validate_feature_panel, write_quality_result
+from .rebound_report import create_config_lock, run_rebound_study, verify_config_lock
+from .rebound_study import load_universe_membership
 from .registry import (
     load_registry,
     promote,
@@ -557,6 +567,288 @@ def cmd_monitor(args) -> int:
     return 0 if not reasons or args.auto_rollback else 1
 
 
+# ---------------------------------------------------------------------------
+# V1.1 Minute & Rebound commands
+# ---------------------------------------------------------------------------
+
+
+def cmd_minute_probe(args) -> int:
+    symbols = [s.strip() for s in args.symbols.split(",")]
+    results = probe_minute_data(
+        symbols,
+        args.date,
+        freq=args.freq,
+        env_file=Path(args.env),
+    )
+    output = [r.__dict__ for r in results]
+    print(json.dumps(output, ensure_ascii=False, indent=2))
+    return 0 if all(r.passed for r in results) else 1
+
+
+def _upstream_coverage_status(
+    data_root: Path,
+    start_date: str,
+    end_date: str,
+) -> tuple[bool, str]:
+    """Require the daily warehouse gate to cover the requested minute range."""
+    path = data_root / "meta" / "coverage.json"
+    if not path.exists():
+        return False, "upstream daily coverage report is missing"
+    try:
+        payload = json.loads(path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False, "upstream daily coverage report is invalid"
+    if not isinstance(payload, dict):
+        return False, "upstream daily coverage report must be an object"
+    if not payload.get("passed", False):
+        return False, "upstream daily coverage report passed=false"
+    start = start_date.replace("-", "")
+    end = end_date.replace("-", "")
+    coverage_start = str(payload.get("start_date") or "").replace("-", "")
+    coverage_end = str(payload.get("end_date") or "").replace("-", "")
+    if len(coverage_start) != 8 or len(coverage_end) != 8:
+        return False, "upstream daily coverage has invalid date bounds"
+    if coverage_start > start:
+        return False, "upstream daily coverage starts after requested range"
+    if coverage_end < end:
+        return False, "upstream daily coverage ends before requested range"
+    return True, ""
+
+
+def cmd_minute_sync(args) -> int:
+    runtime = Path(args.runtime)
+    minute_root = runtime / "minute"
+    data_root = runtime / "data"
+    symbols = [s.strip() for s in args.symbols.split(",")] if args.symbols else None
+
+    trading_dates = load_trading_dates(data_root, args.start, args.end)
+    daily_ok, daily_failure = _upstream_coverage_status(
+        data_root, args.start, args.end
+    )
+    if not daily_ok or not trading_dates:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "error": daily_failure
+                    if not daily_ok
+                    else "authoritative trade calendar is missing",
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 1
+    daily_volume_map = load_daily_volume_map(
+        data_root, args.start, args.end
+    )
+    suspended_map = load_suspended_map(data_root, args.start, args.end)
+
+    report = sync_minute_data(
+        minute_root,
+        _date(args.start),
+        _date(args.end),
+        freq=args.freq,
+        universe_path=Path(args.universe) if args.universe else None,
+        symbols=symbols,
+        env_file=Path(args.env),
+        refresh=args.refresh,
+        request_interval=args.request_interval,
+        max_workers=args.max_workers,
+        trading_dates=trading_dates,
+        expected_dates_by_symbol=daily_volume_map,
+        suspended_dates_by_symbol=suspended_map,
+    )
+    print(json.dumps(report.__dict__, ensure_ascii=False, indent=2, default=str))
+    return 0 if report.passed else 1
+
+
+def cmd_minute_health(args) -> int:
+    runtime = Path(args.runtime)
+    minute_root = runtime / "minute"
+    daily_data_root = runtime / "data"
+
+    trading_dates = load_trading_dates(daily_data_root, args.start, args.end)
+    daily_volume_map = load_daily_volume_map(daily_data_root, args.start, args.end)
+    suspended_map = load_suspended_map(daily_data_root, args.start, args.end)
+    upstream_ok, upstream_failure = _upstream_coverage_status(
+        daily_data_root, args.start, args.end
+    )
+
+    # CRITICAL: Load expected symbols from universe so that stocks with
+    # zero minute data are still checked (fail-closed coverage).
+    expected_symbols: list[str] | None = None
+    universe_path = (
+        Path(args.universe)
+        if hasattr(args, "universe") and args.universe
+        else None
+    )
+    universe_failure = ""
+    if universe_path is None or not universe_path.is_file():
+        universe_failure = "research universe is missing: minute coverage cannot be verified"
+    else:
+        from .minute_data import _symbol_to_ts_code
+
+        try:
+            interval_start = args.start.replace("-", "")
+            interval_end = args.end.replace("-", "")
+            expected_symbols = [
+                _symbol_to_ts_code(symbol)
+                for symbol, (active_from, active_until) in (
+                    load_universe_membership(universe_path).items()
+                )
+                if active_from <= interval_end
+                and active_until >= interval_start
+            ]
+            if not expected_symbols:
+                raise ValueError(
+                    "research universe has no active members "
+                    "in the requested interval"
+                )
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            universe_failure = f"research universe is invalid: {error}"
+        else:
+            expected_set = set(expected_symbols)
+            daily_volume_map = {
+                symbol: dates
+                for symbol, dates in daily_volume_map.items()
+                if symbol in expected_set
+            }
+            suspended_map = {
+                symbol: dates
+                for symbol, dates in suspended_map.items()
+                if symbol in expected_set
+            }
+
+    report = run_minute_quality(
+        minute_root,
+        args.start,
+        args.end,
+        freq=args.freq,
+        trading_dates=trading_dates,
+        daily_volume_map=daily_volume_map,
+        suspended_map=suspended_map,
+        expected_symbols=expected_symbols,
+    )
+    if not upstream_ok:
+        report.failures.append(upstream_failure)
+        report.passed = False
+    if universe_failure:
+        report.failures.append(universe_failure)
+        report.passed = False
+
+    # CRITICAL: Write coverage report to minute_root/meta/coverage.json
+    # so that the research pipeline can gate on it.
+    meta_dir = minute_root / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    coverage_path = meta_dir / "coverage.json"
+    coverage_path.write_text(
+        json.dumps(report.to_dict(), ensure_ascii=False, indent=2, default=str) + "\n",
+        "utf-8",
+    )
+
+    print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2, default=str))
+    return 0 if report.passed else 1
+
+
+def cmd_rebound_study(args) -> int:
+    runtime = Path(args.runtime)
+    config_path = Path(args.config)
+    if not config_path.is_absolute():
+        config_path = RESEARCH_ROOT / config_path
+    summary = run_rebound_study(
+        config_path=config_path,
+        stage=args.stage,
+        runtime_root=runtime / "rebound-v1.1",
+        minute_root=runtime / "minute",
+        daily_data_root=runtime / "data",
+        universe_path=Path(args.universe),
+        repo_root=RESEARCH_ROOT.parent,
+        bootstrap_seed=args.seed,
+    )
+    print(json.dumps(summary.to_dict(), ensure_ascii=False, indent=2, default=str))
+    return 0 if summary.verdict not in ("blocked", "blocked_by_daily_data") else 1
+
+
+def cmd_rebound_lock(args) -> int:
+    runtime = Path(args.runtime)
+    config_path = Path(args.config)
+    if not config_path.is_absolute():
+        config_path = RESEARCH_ROOT / config_path
+    rebound_root = runtime / "rebound-v1.1"
+    coverage_path = runtime / "minute" / "meta" / "coverage.json"
+
+    # CRITICAL: Use latest.json to find actual dev/val report paths.
+    latest_path = rebound_root / "latest.json"
+    dev_report = ""
+    val_report = ""
+    if latest_path.exists():
+        try:
+            latest = json.loads(latest_path.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            print(
+                json.dumps(
+                    {"status": "blocked", "error": f"invalid latest.json: {error}"},
+                    ensure_ascii=False,
+                )
+            )
+            return 1
+        if not isinstance(latest, dict):
+            print(
+                json.dumps(
+                    {"status": "blocked", "error": "latest.json must be an object"},
+                    ensure_ascii=False,
+                )
+            )
+            return 1
+        dev_run_id = latest.get("development", "")
+        val_run_id = latest.get("validation", "")
+        if dev_run_id:
+            dev_report = str(rebound_root / dev_run_id / "summary.json")
+        if val_run_id:
+            val_report = str(rebound_root / val_run_id / "summary.json")
+
+    selected_strategy = args.selected or ""
+    if not selected_strategy and val_report:
+        try:
+            validation_payload = json.loads(Path(val_report).read_text("utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            print(
+                json.dumps(
+                    {
+                        "status": "blocked",
+                        "error": f"invalid validation summary: {error}",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 1
+        if isinstance(validation_payload, dict):
+            selected_strategy = str(
+                validation_payload.get("selected_strategy") or ""
+            )
+
+    lock_path = rebound_root / "config-lock.json"
+    try:
+        lock = create_config_lock(
+            config_path=config_path,
+            coverage_report_path=coverage_path if coverage_path.exists() else None,
+            selected_strategy=selected_strategy,
+            dev_report_path=dev_report,
+            val_report_path=val_report,
+            output_path=lock_path,
+            universe_path=Path(args.universe),
+        )
+    except ValueError as error:
+        print(json.dumps({"status": "blocked", "error": str(error)}, ensure_ascii=False))
+        return 1
+    verified, message = verify_config_lock(config_path, lock_path)
+    if not verified:
+        print(json.dumps({"status": "blocked", "error": message}, ensure_ascii=False))
+        return 1
+    print(json.dumps(lock, ensure_ascii=False, indent=2))
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="ashare-research")
     root.add_argument("--runtime", default=str(DEFAULT_RUNTIME))
@@ -696,6 +988,60 @@ def parser() -> argparse.ArgumentParser:
     monitor.add_argument("--as-of", required=True)
     monitor.add_argument("--auto-rollback", action="store_true")
     monitor.set_defaults(func=cmd_monitor)
+
+    # V1.1 Minute & Rebound commands
+    mprobe = commands.add_parser("minute-probe")
+    mprobe.add_argument("--symbols", required=True, help="Comma-separated symbols")
+    mprobe.add_argument("--date", required=True, help="Probe date YYYY-MM-DD")
+    mprobe.add_argument("--freq", default="5min")
+    mprobe.add_argument("--env", default=str(RESEARCH_ROOT.parent / "pyserver" / ".env"))
+    mprobe.set_defaults(func=cmd_minute_probe)
+
+    msync = commands.add_parser("minute-sync")
+    msync.add_argument("--start", required=True)
+    msync.add_argument("--end", required=True)
+    msync.add_argument("--freq", default="5min")
+    msync.add_argument(
+        "--universe",
+        default=str(RESEARCH_ROOT.parent / "web" / "data" / "universe.json"),
+    )
+    msync.add_argument("--symbols", default=None)
+    msync.add_argument("--env", default=str(RESEARCH_ROOT.parent / "pyserver" / ".env"))
+    msync.add_argument("--refresh", action="store_true")
+    msync.add_argument("--request-interval", type=float, default=0.15)
+    msync.add_argument("--max-workers", type=int, choices=[1, 2], default=1)
+    msync.set_defaults(func=cmd_minute_sync)
+
+    mhealth = commands.add_parser("minute-health")
+    mhealth.add_argument("--start", required=True)
+    mhealth.add_argument("--end", required=True)
+    mhealth.add_argument("--freq", default="5min")
+    mhealth.add_argument(
+        "--universe",
+        default=str(RESEARCH_ROOT.parent / "web" / "data" / "universe.json"),
+    )
+    mhealth.set_defaults(func=cmd_minute_health)
+
+    rstudy = commands.add_parser("rebound-study")
+    rstudy.add_argument("--stage", required=True, choices=["development", "validation", "frozen"])
+    rstudy.add_argument("--config", required=True)
+    rstudy.add_argument(
+        "--universe", default=str(RESEARCH_ROOT.parent / "web" / "data" / "universe.json")
+    )
+    rstudy.add_argument("--seed", type=int, default=None)
+    rstudy.set_defaults(func=cmd_rebound_study)
+
+    rlock = commands.add_parser("rebound-lock")
+    rlock.add_argument("--config", required=True)
+    rlock.add_argument("--selected", default="")
+    rlock.add_argument(
+        "--universe",
+        default=str(
+            RESEARCH_ROOT.parent / "web" / "data" / "universe.json"
+        ),
+    )
+    rlock.set_defaults(func=cmd_rebound_lock)
+
     return root
 
 

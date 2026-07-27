@@ -20,7 +20,8 @@ export async function POST(req: NextRequest) {
     }
     const data = await Promise.race([fetchAnalysts(symbols), timeout(ANALYST_TIMEOUT_MS)]);
     return NextResponse.json(data);
-  } catch {
+  } catch (e) {
+    console.error("[api/analyst/batch] batch fetch failed, attempting per-symbol fallback", { symbols, error: e instanceof Error ? e.message : String(e) });
     const { data, anySucceeded } = await fallback(symbols);
     if (!anySucceeded) {
       return NextResponse.json({ error: "analyst service unavailable" }, { status: 504 });

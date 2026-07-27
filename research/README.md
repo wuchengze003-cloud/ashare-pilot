@@ -76,3 +76,32 @@ the value on each actual trade.
 The data and execution patterns are adapted from the MIT-licensed
 `tickflow-stock-panel`; Qlib, LightGBM, Optuna and Evidently remain upstream
 dependencies rather than copied implementations.
+
+## V1.1 低位反弹事件研究
+
+V1.1 是一个隔离的分钟级事件研究工具，回答"低位博反弹时，哪种入场确认
+能提高净期望收益"。它不改变 V1 信号、不接入真实持仓、不生成买卖建议。
+
+```bash
+# 分钟数据探测
+uv run ashare-research minute-probe --symbols 000001,300308,688256 --date 2025-07-01 --freq 5min
+
+# 分钟数据同步
+uv run ashare-research minute-sync --start 2025-01-01 --end 2026-07-23 --freq 5min --universe ../web/data/universe.json
+
+# 分钟数据健康检查
+uv run ashare-research minute-health --start 2025-01-01 --end 2026-07-23 --freq 5min
+
+# 低位反弹事件研究
+uv run ashare-research rebound-study --stage development --config config/rebound-v1.1.json
+uv run ashare-research rebound-study --stage validation --config config/rebound-v1.1.json
+uv run ashare-research rebound-lock --config config/rebound-v1.1.json
+uv run ashare-research rebound-study --stage frozen --config config/rebound-v1.1.json
+```
+
+V1.1 研究产物位于 `runtime/rebound-v1.1/`，包括事件 Parquet、交易明细、
+统计汇总和中文报告。配置锁定后生成 `config-lock.json`，冻结验收必须校验
+配置哈希一致。
+
+V1.1 与 V2 的边界：V1.1 只改善执行研究（D+1 分时入场条件），不改变 D 收盘
+信号的时间边界，不产生可晋级模型，不进入 V2 的 promotion 流程。

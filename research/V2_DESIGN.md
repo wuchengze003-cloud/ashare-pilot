@@ -102,3 +102,26 @@ flowchart LR
 
 Until every item is satisfied, the UI must say that V1 is active and that no ML
 model has earned promotion.
+
+## V1.1 与 V2 的边界
+
+V1.1 低位反弹事件研究是一个独立的执行研究工具，与 V2 模型晋级流程完全隔离：
+
+1. **时间边界不变**：V1.1 只研究 D+1 分时入场条件（next_open、vwap_reclaim、
+   higher_low_breakout），不改变 D 收盘信号的形成时间。任何 D+1 数据都不能
+   回用于修改 D 日特征或候选。
+
+2. **不产生可晋级模型**：V1.1 输出的是事件研究统计（胜率、净收益、盈亏比、
+   CVaR、bootstrap CI），不是机器学习模型。它不进入 `registry/`，不参与
+   champion/challenger 比较。
+
+3. **不接入生产**：V1.1 结果不能直接生成订单、修改持仓或触发自动化盯盘。
+   若未来需要将分钟执行质量纳入 V2 评估，必须通过单独的 V1.2/V1.3 版本，
+   并经用户明确授权。
+
+4. **数据隔离**：V1.1 分钟数据存储在 `runtime/minute/`，与 V2 的
+   `runtime/data/` 日线点时数据分开。两者共享 Tushare 数据源但互不覆盖。
+
+5. **配置锁定**：V1.1 使用 `config/rebound-v1.1.json` 和 `config-lock.json`
+   进行预注册研究，冻结区间（2026-02-24 后）只能运行一次正式验收，不得回
+   用于调参。这与 V2 的 frozen holdout 语义一致但独立运行。

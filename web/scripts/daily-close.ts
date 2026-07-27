@@ -288,6 +288,10 @@ async function main() {
     const universe = loadActiveEntries(expectedDate);
     const pyserverCacheDb = path.resolve(webRoot, process.env.PYSERVER_CACHE_DB ?? "../pyserver/cache.db");
     const marketData = buildSymbolSeriesFromPyserverCache(universe, pyserverCacheDb);
+    const seriesSymbols = new Set(marketData.series.map((item) => item.entry.symbol));
+    const allowedMissingSeriesSymbols = universe
+      .filter((entry) => !seriesSymbols.has(entry.symbol) && entry.strategy_from === expectedDate)
+      .map((entry) => entry.symbol);
     const benchmarkLatestDate = marketData.benchmark.at(-1)?.date;
     health.latest_market_date = benchmarkLatestDate;
     if (benchmarkLatestDate !== expectedDate) {
@@ -303,11 +307,13 @@ async function main() {
     const coverageIssues = validateDailyCloseData({
       expectedDate,
       expectedUniverseCount: universe.length,
+      expectedSymbols: universe.map((entry) => entry.symbol),
       benchmarkLatestDate,
       series: marketData.series.map((item) => ({
         symbol: item.entry.symbol,
         latestDate: item.klines.at(-1)?.date,
       })),
+      allowedMissingSeriesSymbols,
       allowedStaleSymbols: parseSymbolList(process.env.DAILY_CLOSE_ALLOWED_STALE_SYMBOLS),
       backtest: validationInput.backtest as RuntimeBacktestSnapshot | null,
       signals: validationInput.signals as RuntimeSignalsSnapshot | null,
@@ -318,6 +324,14 @@ async function main() {
       throw new Error(
         `daily close data validation failed:\n${coverageIssues.map((issue) => `- ${issue.code}: ${issue.message}`).join("\n")}`,
       );
+    }
+    if (allowedMissingSeriesSymbols.length > 0) {
+      steps.push({
+        name: "allow short-history new listings",
+        status: "skipped",
+        durationMs: 0,
+        detail: allowedMissingSeriesSymbols.join(","),
+      });
     }
     steps.push({ name: "validate complete close coverage", status: "passed", durationMs: 0, detail: `${universe.length}/${universe.length}` });
 

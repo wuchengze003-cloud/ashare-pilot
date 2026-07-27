@@ -12,7 +12,8 @@ export async function POST(req: NextRequest) {
 
   try {
     return NextResponse.json(await fetchSpots(symbols));
-  } catch {
+  } catch (e) {
+    console.error("[api/spot/batch] fetchSpots failed", { symbols, error: e instanceof Error ? e.message : String(e) });
     return NextResponse.json([]);
   }
 }

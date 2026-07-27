@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
     const data = await Promise.race([fetchAnalyst(symbol), timeout(ANALYST_TIMEOUT_MS)]);
     return NextResponse.json(data);
   } catch (e) {
+    console.error("[api/analyst] fetchAnalyst failed, attempting spot fallback", { symbol, error: e instanceof Error ? e.message : String(e) });
     try {
       const spot = await Promise.race([fetchSpot(symbol), timeout(SPOT_FALLBACK_TIMEOUT_MS)]);
       return NextResponse.json({
@@ -34,8 +35,8 @@ export async function GET(req: NextRequest) {
         target_price_source: null,
         upside_pct: null,
       });
-    } catch {
-      // Preserve the original analyst error; it is more useful for debugging.
+    } catch (spotErr) {
+      console.error("[api/analyst] spot fallback also failed", { symbol, error: spotErr instanceof Error ? spotErr.message : String(spotErr) });
     }
     return NextResponse.json(
       { error: e instanceof Error ? e.message : String(e) },

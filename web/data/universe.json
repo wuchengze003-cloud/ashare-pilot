@@ -1,6 +1,6 @@
 {
   "$schema_note": "硅基文明消费股分层股票池。pool_tier标识当前正式/观察层；strategy_from/strategy_until控制点时策略生效区间；previous_theme保留历史分类。",
-  "updated_at": "2026-07-02",
+  "updated_at": "2026-07-27",
   "updated_by": "codex-point-in-time-curation",
   "entries": [
     {
@@ -342,6 +342,15 @@
       "note": "NAND/DRAM/MCU 龙头",
       "global_supply": false,
       "pool_tier": "core"
+    },
+    {
+      "symbol": "688825",
+      "name": "长鑫科技",
+      "theme": "存储/HBM",
+      "note": "国产 DRAM 研发设计制造一体化企业",
+      "global_supply": false,
+      "pool_tier": "core",
+      "strategy_from": "2026-07-27"
     },
     {
       "symbol": "688008",

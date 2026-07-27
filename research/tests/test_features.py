@@ -115,3 +115,82 @@ def test_labels_use_next_open_and_future_close(tmp_path):
     )
     assert truncated_result.end_date == "2026-03-05"
     assert pl.read_parquet(truncated)["date"].max() == date(2026, 3, 5)
+
+
+def test_nonpositive_pe_remains_missing_instead_of_creating_invalid_log(tmp_path):
+    rows = []
+    adjustments = []
+    basics = []
+    flows = []
+    start = date(2025, 10, 1)
+    for index in range(80):
+        day = (start + timedelta(days=index)).strftime("%Y%m%d")
+        rows.append(
+            {
+                "ts_code": "300001.SZ",
+                "trade_date": day,
+                "open": 10.0,
+                "high": 10.5,
+                "low": 9.5,
+                "close": 10.2,
+                "vol": 1_000.0,
+                "amount": 10_000.0,
+            }
+        )
+        adjustments.append(
+            {"ts_code": "300001.SZ", "trade_date": day, "adj_factor": 1.0}
+        )
+        basics.append(
+            {
+                "ts_code": "300001.SZ",
+                "trade_date": day,
+                "turnover_rate": 2.0,
+                "pe_ttm": -5.0 if index == 65 else 20.0,
+                "pb": 3.0,
+                "total_mv": 100_000.0,
+            }
+        )
+        flows.append(
+            {
+                "ts_code": "300001.SZ",
+                "trade_date": day,
+                "net_mf_amount": 10.0,
+                "buy_lg_amount": 50.0,
+                "sell_lg_amount": 40.0,
+            }
+        )
+    write_partition(tmp_path, "daily", pl.DataFrame(rows))
+    write_partition(tmp_path, "adj_factor", pl.DataFrame(adjustments))
+    write_partition(tmp_path, "daily_basic", pl.DataFrame(basics))
+    write_partition(tmp_path, "moneyflow", pl.DataFrame(flows))
+    write_partition(
+        tmp_path,
+        "stk_limit",
+        pl.DataFrame(
+            {
+                "ts_code": ["300001.SZ"] * len(rows),
+                "trade_date": [row["trade_date"] for row in rows],
+                "up_limit": [11.0] * len(rows),
+                "down_limit": [9.0] * len(rows),
+            }
+        ),
+    )
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    pl.DataFrame(
+        schema={
+            "ts_code": pl.String,
+            "name": pl.String,
+            "start_date": pl.String,
+            "end_date": pl.String,
+        }
+    ).write_parquet(reference / "namechange.parquet")
+
+    output = tmp_path / "features" / "panel.parquet"
+    build_feature_panel(tmp_path, output, round_trip_fee_bps=10)
+    panel = pl.read_parquet(output).filter(
+        pl.col("date") == start + timedelta(days=65)
+    )
+
+    assert panel.height == 1
+    assert panel["log_pe_ttm"].null_count() == 1

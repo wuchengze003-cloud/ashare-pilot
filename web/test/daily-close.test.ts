@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseSymbolList, validateDailyCloseData } from "../lib/dailyClose";
+import { parseSymbolList, validateDailyCloseData, type DailyCloseValidationInput } from "../lib/dailyClose";
 
-function validInput() {
+function validInput(): DailyCloseValidationInput {
   return {
     expectedDate: "2026-06-29",
     expectedUniverseCount: 2,
@@ -30,11 +30,29 @@ test("daily close validation accepts a complete same-day snapshot", () => {
   assert.deepEqual(validateDailyCloseData(validInput()), []);
 });
 
+test("daily close validation can allow short-history new listings", () => {
+  const input = validInput();
+  input.expectedUniverseCount = 3;
+  input.expectedSymbols = ["000001", "600000", "688825"];
+  input.meta!.universe_count = 3;
+  input.analystItems.push({
+    symbol: "688825",
+    current_price: 49,
+    current_price_as_of: "2026-06-29T15:01:00",
+  });
+
+  assert.deepEqual(validateDailyCloseData(input).map((issue) => issue.code), ["MISSING_PRICE_SERIES"]);
+  assert.deepEqual(
+    validateDailyCloseData({ ...input, allowedMissingSeriesSymbols: ["688825"] }),
+    [],
+  );
+});
+
 test("daily close validation rejects stale market and signal data", () => {
   const input = validInput();
   input.benchmarkLatestDate = "2026-06-26";
   input.series[1].latestDate = "2026-06-26";
-  input.signals.signal_date = "2026-06-26";
+  input.signals!.signal_date = "2026-06-26";
   const codes = validateDailyCloseData(input).map((issue) => issue.code);
   assert.ok(codes.includes("BENCHMARK_DATE_MISMATCH"));
   assert.ok(codes.includes("STALE_PRICE_SERIES"));

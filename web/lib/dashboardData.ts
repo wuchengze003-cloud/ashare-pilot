@@ -77,7 +77,10 @@ export function parsePriceCsv(content: string): PriceRow[] {
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(",");
     const date = cols[idx.time]?.trim();
-    if (!date) continue;
+    if (!date) {
+      console.warn("[dashboardData:parsePriceCsv] skipped row: missing date", { line: i + 1, ticker: cols[idx.ticker]?.trim() ?? "unknown" });
+      continue;
+    }
     rows.push({
       date,
       open: parseNumber(cols[idx.open]) ?? 0,
@@ -115,7 +118,10 @@ export function parseFinancialCsv(content: string, category: "growth" | "profita
     const cols = lines[i].split(",");
     const ticker = cols[tickerIdx]?.trim();
     const reportDate = cols[timeIdx]?.trim();
-    if (!ticker) continue;
+    if (!ticker) {
+      console.warn("[dashboardData:parseFinancialCsv] skipped row: missing ticker", { category, line: i + 1, reportDate });
+      continue;
+    }
     const value = parseNumber(cols[valueIdx]);
     const base: FinancialRow = { ticker, reportDate };
     if (category === "growth") base.profitYoy = value;
@@ -161,7 +167,10 @@ export function buildFundamentals(
   for (const g of growthRows) {
     if (g.profitYoy == null) continue;
     const p = profitByKey.get(`${g.ticker}|${g.reportDate}`);
-    if (!p || p.eps == null || p.eps <= 0) continue;
+    if (!p || p.eps == null || p.eps <= 0) {
+      console.warn("[dashboardData:buildFundamentals] skipped fundamental: missing/invalid EPS", { ticker: g.ticker, reportDate: g.reportDate, eps: p?.eps ?? null });
+      continue;
+    }
 
     const ticker = g.ticker;
     const prices = priceMap.get(ticker);
@@ -249,7 +258,10 @@ export function buildSymbolSeries(
   const series: SymbolSeries[] = [];
   for (const entry of entries) {
     const rows = priceMap.get(entry.symbol);
-    if (!rows || rows.length < 30) continue;
+    if (!rows || rows.length < 30) {
+      console.warn("[dashboardData:buildSymbolSeries] skipped symbol: insufficient price data", { symbol: entry.symbol, name: entry.name, rowCount: rows?.length ?? 0, source: "csv-cache" });
+      continue;
+    }
     const klines: Kline[] = rows.map((r) => ({
       date: r.date,
       open: r.open,
@@ -299,10 +311,14 @@ export function buildSymbolSeriesFromPyserverCache(
         }>;
         try {
           payload = JSON.parse(cacheRow.payload);
-        } catch {
+        } catch (parseErr) {
+          console.warn("[dashboardData:pyserverCache] failed to parse cached payload", { symbol, fetchedAt: cacheRow.fetched_at, error: parseErr instanceof Error ? parseErr.message : String(parseErr) });
           continue;
         }
-        if (!Array.isArray(payload)) continue;
+        if (!Array.isArray(payload)) {
+          console.warn("[dashboardData:pyserverCache] cached payload is not an array", { symbol, fetchedAt: cacheRow.fetched_at });
+          continue;
+        }
 
         for (const r of payload) {
           if (!r.date) continue;
@@ -331,7 +347,10 @@ export function buildSymbolSeriesFromPyserverCache(
     const series: SymbolSeries[] = [];
     for (const entry of entries) {
       const rows = loadRows(entry.symbol);
-      if (rows.length < 30) continue;
+      if (rows.length < 30) {
+        console.warn("[dashboardData:pyserverCache] skipped symbol: insufficient kline data", { symbol: entry.symbol, name: entry.name, rowCount: rows.length, source: "sqlite-cache" });
+        continue;
+      }
       const klines: Kline[] = rows.map((r) => ({
         date: r.date,
         open: r.open,

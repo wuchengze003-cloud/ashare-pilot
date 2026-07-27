@@ -29,3 +29,7 @@ web/data/runtime/signals-history/*.json
 !/research/runtime/.gitkeep
 /ops/agents/runtime/
 /.agent-worktrees/
+
+# Local personal monitoring state and generated review artifacts.
+/monitoring/
+/tmp/

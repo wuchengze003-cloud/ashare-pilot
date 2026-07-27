@@ -240,7 +240,11 @@ def build_feature_panel(
             (
                 (pl.col("buy_lg_amount") - pl.col("sell_lg_amount")) / (pl.col("amount").abs() + 1)
             ).alias("large_order_ratio"),
-            pl.col("pe_ttm").log1p().alias("log_pe_ttm"),
+            pl.when(pl.col("pe_ttm").is_not_null() & (pl.col("pe_ttm") > 0))
+            .then(pl.col("pe_ttm").log1p())
+            .otherwise(None)
+            .cast(pl.Float64)
+            .alias("log_pe_ttm"),
             pl.col("pb").log1p().alias("log_pb"),
             pl.col("total_mv").log1p().alias("log_market_cap"),
         ]
