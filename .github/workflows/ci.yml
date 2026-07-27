@@ -78,3 +78,37 @@ jobs:
         env:
           TUSHARE_TOKEN: dummy-ci-token
         run: uv run python -c "import importlib.util as u; spec = u.spec_from_file_location('m','main.py'); m = u.module_from_spec(spec); spec.loader.exec_module(m); print('main loaded, app =', m.app)"
+
+      - name: Unit tests
+        env:
+          TUSHARE_TOKEN: dummy-ci-token
+        run: uv run python -m unittest test_main
+
+  # ----------------------------------------------------------------------
+  # Research pipeline: pytest suite (ledger, labels, walk-forward, promotion).
+  # ----------------------------------------------------------------------
+  research:
+    name: research (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: research
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: research/uv.lock
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Sync dependencies (locked)
+        run: uv sync --group dev --frozen
+
+      - name: Run tests
+        run: uv run pytest -q
