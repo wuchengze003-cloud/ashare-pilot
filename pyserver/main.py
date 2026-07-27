@@ -16,6 +16,7 @@ per symbol per trading day (klines/fundamentals/analyst) or per 30s (spot).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -24,6 +25,13 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("pyserver")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
 
 import akshare as ak
 import pandas as pd
@@ -72,7 +80,37 @@ if TUSHARE_HTTP_URL:
 DB_PATH = Path(os.environ.get("PYSERVER_DB_PATH", Path(__file__).parent / "cache.db"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+# WAL once at startup: the /spots batch fans out across threads, and the
+# default rollback journal serializes concurrent readers against one writer.
+with sqlite3.connect(DB_PATH) as _bootstrap_conn:
+    _bootstrap_conn.execute("PRAGMA journal_mode=WAL")
+
 app = FastAPI(title="silicon-civ pyserver", version="0.2.0")
+
+
+@app.middleware("http")
+async def _request_logging_middleware(request, call_next):
+    """Log every request with method, path, status and duration."""
+    start = time.monotonic()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        logger.error(
+            "request %s %s -> 500 (%.0fms) error=%s: %s",
+            request.method, request.url.path, elapsed_ms,
+            type(exc).__name__, exc,
+        )
+        raise
+    elapsed_ms = (time.monotonic() - start) * 1000
+    level = logging.WARNING if response.status_code >= 400 else logging.INFO
+    logger.log(
+        level,
+        "request %s %s -> %d (%.0fms)",
+        request.method, request.url.path, response.status_code, elapsed_ms,
+    )
+    return response
+
 
 # ---------- cache ----------------------------------------------------------
 
@@ -88,7 +126,10 @@ CREATE TABLE IF NOT EXISTS cache (
 
 @contextmanager
 def db():
-    conn = sqlite3.connect(DB_PATH)
+    # busy_timeout guards against "database is locked" when the /spots batch
+    # thread pool writes concurrently with an incoming read.
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.execute("PRAGMA busy_timeout=10000")
     conn.execute(SCHEMA)
     try:
         yield conn
@@ -108,7 +149,14 @@ def cache_get(key: str) -> Any | None:
     payload, fetched_at, ttl = row
     if ttl > 0 and time.time() - fetched_at > ttl:
         return None
-    return json.loads(payload)
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        # A corrupt row would otherwise 500 every request hitting this key.
+        logger.warning("cache corrupt payload, purging key=%s", key)
+        with db() as conn:
+            conn.execute("DELETE FROM cache WHERE key = ?", (key,))
+        return None
 
 
 def cache_put(key: str, value: Any, ttl_seconds: int) -> None:
@@ -138,7 +186,16 @@ def seconds_until_next_trading_close() -> int:
     target = now.replace(hour=15, minute=30, second=0, microsecond=0)
     if now >= target:
         target += timedelta(days=1)
+    # Daily bars don't change over the weekend; a TTL expiring on Sat/Sun
+    # would force a pointless refetch of an identical series.
+    while target.weekday() >= 5:  # Saturday=5, Sunday=6
+        target += timedelta(days=1)
     return int((target - now).total_seconds())
+
+
+def _norm_symbol(symbol: str) -> str:
+    """Cache-key normalization so `SH600519` and `sh600519` share one entry."""
+    return symbol.strip().lower()
 
 
 # ---------- retry wrapper + per-endpoint rate limiter ----------------------
@@ -193,14 +250,20 @@ def _source_status_snapshot() -> dict[str, dict[str, Any]]:
 
 
 def _with_retries(fn, *args, attempts: int = 3, base_delay: float = 0.5, **kwargs):
+    fn_name = getattr(fn, "__name__", repr(fn))
     last: Exception | None = None
     for i in range(attempts):
         try:
             return fn(*args, **kwargs)
         except Exception as e:  # noqa: BLE001
             last = e
+            logger.warning(
+                "retry %d/%d fn=%s error=%s: %s",
+                i + 1, attempts, fn_name, type(e).__name__, e,
+            )
             time.sleep(base_delay * (2 ** i))
     assert last is not None
+    logger.error("all %d retries exhausted fn=%s error=%s: %s", attempts, fn_name, type(last).__name__, last)
     raise last
 
 
@@ -245,7 +308,8 @@ def _tdx_call(method: str, *args, **kwargs):
                     return None
                 try:
                     _tdx_client = MacClient.from_best_host(ping_timeout=3.0)
-                except Exception:
+                except Exception as e:
+                    logger.error("easy_tdx connect failed: %s: %s", type(e).__name__, e)
                     _mark_source("easy_tdx", False, "connect failed")
                     _tdx_down_until = time.monotonic() + 120
                     return None
@@ -254,6 +318,10 @@ def _tdx_call(method: str, *args, **kwargs):
                 _mark_source("easy_tdx", True)
                 return result
             except Exception as e:
+                logger.error(
+                    "easy_tdx call failed method=%s attempt=%d error=%s: %s",
+                    method, attempt + 1, type(e).__name__, e,
+                )
                 _mark_source("easy_tdx", False, str(e))
                 try:
                     _tdx_client.close()
@@ -370,7 +438,8 @@ def _attach_profit_yoy(out: dict[str, Any], ts_code: str, market: str) -> None:
         return
     try:
         profit_yoy = _latest_profit_yoy(ts_code)
-    except Exception:
+    except Exception as e:
+        logger.warning("profit_yoy fetch failed ts_code=%s error=%s: %s", ts_code, type(e).__name__, e)
         return
     if profit_yoy is not None:
         out["profit_yoy"] = profit_yoy
@@ -386,6 +455,25 @@ class Kline(BaseModel):
     low: float
     close: float
     volume: float
+
+
+class MinuteKline(BaseModel):
+    time: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    amount: float
+
+
+class MinuteKlineSeries(BaseModel):
+    symbol: str
+    ts_code: str
+    freq: str
+    source: str
+    realtime: bool
+    bars: list[MinuteKline]
 
 
 class Fundamental(BaseModel):
@@ -445,6 +533,56 @@ def _to_ts_code(symbol: str) -> tuple[str, str]:
 def _date(s: str) -> str:
     s = s.replace("-", "")
     return s
+
+
+_DATE_8 = re.compile(r"^\d{8}$")
+_MINUTE_FREQS = ("1min", "5min", "15min", "30min", "60min")
+_MINUTE_RANGE_LIMIT = timedelta(days=31)
+
+
+def _checked_date(s: str, param: str) -> str:
+    """Normalize and validate a date param; 400 instead of an upstream 502."""
+    compact = _date(s)
+    if not _DATE_8.match(compact):
+        raise HTTPException(400, f"invalid {param} date: {s!r} (want YYYYMMDD)")
+    return compact
+
+
+def _minute_datetime(value: str, param: str, *, end_of_day: bool) -> datetime:
+    normalized = value.strip().replace("T", " ")
+    date_only = False
+    for fmt in ("%Y%m%d", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+        try:
+            parsed = datetime.strptime(normalized, fmt)
+            date_only = fmt != "%Y-%m-%d %H:%M:%S"
+            break
+        except ValueError:
+            continue
+    else:
+        raise HTTPException(
+            400,
+            f"invalid {param}: {value!r} "
+            "(want YYYYMMDD, YYYY-MM-DD, or YYYY-MM-DD HH:MM:SS)",
+        )
+    if date_only:
+        return parsed.replace(
+            hour=15 if end_of_day else 9,
+            minute=0 if end_of_day else 30,
+        )
+    return parsed
+
+
+def _checked_minute_range(start: str, end: str | None) -> tuple[datetime, datetime]:
+    start_dt = _minute_datetime(start, "start", end_of_day=False)
+    if end is None:
+        end_dt = start_dt.replace(hour=15, minute=0, second=0)
+    else:
+        end_dt = _minute_datetime(end, "end", end_of_day=True)
+    if start_dt > end_dt:
+        raise HTTPException(400, f"start {start!r} is after end {end!r}")
+    if end_dt - start_dt > _MINUTE_RANGE_LIMIT:
+        raise HTTPException(400, "minute kline range cannot exceed 31 calendar days")
+    return start_dt, end_dt
 
 
 def _num_or_none(value: Any) -> float | None:
@@ -514,6 +652,7 @@ def _ak_a_spot_rows(ts_code: str, market: str) -> dict[str, Any] | None:
         data = response.json().get("data")
         _mark_source("eastmoney_push2", True)
     except Exception as e:
+        logger.warning("eastmoney_push2 fetch failed code=%s error=%s: %s", code, type(e).__name__, e)
         _mark_source("eastmoney_push2", False, str(e))
         cache_put(key, {"__miss__": True}, 10)
         return None
@@ -544,7 +683,8 @@ def _ak_a_spot(ts_code: str, market: str) -> dict[str, Any] | None:
         return None
     try:
         return _ak_a_spot_rows(ts_code, market)
-    except Exception:
+    except Exception as e:
+        logger.warning("ak_a_spot failed ts_code=%s error=%s: %s", ts_code, type(e).__name__, e)
         return None
 
 
@@ -600,6 +740,7 @@ def _tencent_spot(symbol: str, ts_code: str, market: str) -> dict[str, Any] | No
             "as_of": datetime.now().isoformat(),
         }
     except Exception as e:
+        logger.warning("tencent_quote failed symbol=%s error=%s: %s", symbol, type(e).__name__, e)
         _mark_source("tencent_quote", False, str(e))
         return None
 
@@ -646,6 +787,7 @@ def _sina_spot(symbol: str, ts_code: str, market: str) -> dict[str, Any] | None:
             "as_of": f"{trade_date}T{trade_time}" if trade_date and trade_time else datetime.now().isoformat(),
         }
     except Exception as e:
+        logger.warning("sina_quote failed symbol=%s error=%s: %s", symbol, type(e).__name__, e)
         _mark_source("sina_quote", False, str(e))
         return None
 
@@ -660,7 +802,8 @@ def _ak_consensus_eps(symbol: str) -> tuple[float | None, int | None]:
             attempts=2,
             base_delay=0.2,
         )
-    except Exception:
+    except Exception as e:
+        logger.warning("consensus_eps fetch failed symbol=%s error=%s: %s", symbol, type(e).__name__, e)
         return None, None
     if df is None or df.empty or "年度" not in df.columns or "均值" not in df.columns:
         return None, None
@@ -690,7 +833,8 @@ def _ak_research_consensus(symbol: str) -> dict[str, Any]:
             attempts=2,
             base_delay=0.2,
         )
-    except Exception:
+    except Exception as e:
+        logger.warning("research_consensus fetch failed symbol=%s error=%s: %s", symbol, type(e).__name__, e)
         return {}
     if df is None or df.empty:
         return {}
@@ -909,8 +1053,8 @@ def _refresh_analyst_market_fields(out: dict[str, Any], symbol: str) -> dict[str
             out["current_price"] = round(price, 3)
             out["current_price_source"] = spot_payload.get("source")
             out["current_price_as_of"] = spot_payload.get("as_of")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("analyst spot refresh failed symbol=%s error=%s: %s", symbol, type(e).__name__, e)
 
     source = str(out.get("target_price_source") or "")
     has_explicit_target = bool(source and not source.startswith("model_"))
@@ -936,9 +1080,9 @@ def _refresh_analyst_market_fields(out: dict[str, Any], symbol: str) -> dict[str
                     out["target_horizon_days"] = 30
                 else:
                     _mark_source("model_target", True, "no constructive setup")
-            except Exception:
+            except Exception as e:
+                logger.warning("model_target calc failed symbol=%s error=%s: %s", symbol, type(e).__name__, e)
                 _mark_source("model_target", False, "calculation error")
-                pass
 
     return _sanitize_analyst_payload(out)
 
@@ -955,7 +1099,8 @@ def _resolve_name(ts_code: str, market: str) -> str | None:
             df = _pro.hk_basic(fields="ts_code,name")
         else:
             df = _pro.stock_basic(list_status="L", fields="ts_code,name")
-    except Exception:
+    except Exception as e:
+        logger.warning("resolve_name failed ts_code=%s market=%s error=%s: %s", ts_code, market, type(e).__name__, e)
         return None
     if df is None or df.empty:
         return None
@@ -972,6 +1117,8 @@ def _resolve_name(ts_code: str, market: str) -> str | None:
 
 @app.get("/health")
 def health():
+    sources = _source_status_snapshot()
+    logger.info("health check sources=%s", {k: v.get("ok") for k, v in sources.items()})
     return {
         "ok": True,
         "time": datetime.now().isoformat(),
@@ -984,7 +1131,12 @@ def health():
             "tushare_daily",
         ],
         "kline_priority": ["easy_tdx", "tushare_pro_bar"],
-        "sources": _source_status_snapshot(),
+        "minute_kline": {
+            "source": "tushare_stk_mins",
+            "realtime": False,
+            "frequencies": list(_MINUTE_FREQS),
+        },
+        "sources": sources,
     }
 
 
@@ -996,8 +1148,10 @@ def klines(
     adjust: str = Query("qfq", pattern="^(|qfq|hfq)$"),
 ):
     end = end or date.today().strftime("%Y%m%d")
-    start, end = _date(start), _date(end)
-    key = f"kline:{symbol}:{start}:{end}:{adjust}"
+    start, end = _checked_date(start, "start"), _checked_date(end, "end")
+    if start > end:
+        raise HTTPException(400, f"start {start} is after end {end}")
+    key = f"kline:{_norm_symbol(symbol)}:{start}:{end}:{adjust}"
     cached = cache_get(key)
     if cached is not None:
         return cached
@@ -1036,6 +1190,7 @@ def klines(
 
     if df is None or df.empty:
         _mark_source("akshare_hk_hist" if market == "hk" else "tushare_pro_bar", False, "empty response")
+        logger.warning("klines empty upstream symbol=%s start=%s end=%s market=%s", symbol, start, end, market)
         cache_put(key, [], 3600)
         return []
 
@@ -1065,9 +1220,82 @@ def klines(
     return rows
 
 
+@app.get("/minute-klines", response_model=MinuteKlineSeries)
+def minute_klines(
+    symbol: str = Query(..., description="A-share symbol, e.g. sh600519 or 000858"),
+    start: str = Query(
+        ...,
+        description="YYYYMMDD, YYYY-MM-DD, or YYYY-MM-DD HH:MM:SS",
+    ),
+    end: str | None = Query(
+        None,
+        description="Defaults to 15:00:00 on the start date",
+    ),
+    freq: str = Query("1min", pattern="^(1|5|15|30|60)min$"),
+):
+    start_dt, end_dt = _checked_minute_range(start, end)
+    ts_code, market = _to_ts_code(symbol)
+    if market not in {"sh", "sz", "bj"}:
+        raise HTTPException(400, "historical minute klines currently support A-shares only")
+
+    start_value = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+    end_value = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+    normalized_symbol = _norm_symbol(symbol)
+    key = f"minute-kline:v1:{normalized_symbol}:{start_value}:{end_value}:{freq}"
+    cached = cache_get(key)
+    if cached is not None:
+        return cached
+
+    try:
+        df = _with_retries(
+            _pro.stk_mins,
+            ts_code=ts_code,
+            freq=freq,
+            start_date=start_value,
+            end_date=end_value,
+            fields="ts_code,trade_time,open,high,low,close,vol,amount",
+        )
+        _mark_source("tushare_stk_mins", True)
+    except Exception as e:
+        _mark_source("tushare_stk_mins", False, str(e))
+        raise HTTPException(502, f"tushare historical minute error: {e}") from e
+
+    bars: list[dict[str, Any]] = []
+    if df is not None and not df.empty:
+        df = df.sort_values("trade_time")
+        bars = [
+            {
+                "time": str(r.trade_time),
+                "open": float(r.open),
+                "high": float(r.high),
+                "low": float(r.low),
+                "close": float(r.close),
+                "volume": float(r.vol),
+                "amount": float(r.amount),
+            }
+            for r in df.itertuples()
+        ]
+    else:
+        _mark_source("tushare_stk_mins", True, "empty response")
+
+    out = {
+        "symbol": normalized_symbol,
+        "ts_code": ts_code,
+        "freq": freq,
+        "source": "tushare_stk_mins",
+        # stk_mins is the historical-minute product. It must not be used as
+        # an intraday realtime quote even if a provider later exposes same-day rows.
+        "realtime": False,
+        "bars": bars,
+    }
+    ttl = 30 * 24 * 3600 if end_dt.date() < date.today() else 300
+    cache_put(key, out, ttl)
+    return out
+
+
 @app.get("/fundamental", response_model=Fundamental)
 def fundamental(symbol: str):
-    key = f"fund:v2:{symbol}"
+    key = f"fund:v2:{_norm_symbol(symbol)}"
     cached = cache_get(key)
     if cached is not None:
         return cached
@@ -1106,6 +1334,7 @@ def fundamental(symbol: str):
             fields="ts_code,trade_date,close,pe_ttm,pb,total_mv",
         )
     except Exception as e:
+        logger.error("fundamental upstream failed symbol=%s market=%s error=%s: %s", symbol, market, type(e).__name__, e)
         raise HTTPException(502, f"tushare error: {e}") from e
 
     if df is not None and not df.empty:
@@ -1146,8 +1375,9 @@ def analysts(symbols: str = Query(..., description="comma-separated symbols")):
         seen.add(symbol)
         try:
             out.append(analyst(symbol))
-        except Exception:
+        except Exception as e:
             # Keep a batch refresh useful even if one upstream symbol fails.
+            logger.warning("analysts batch failed symbol=%s error=%s: %s", symbol, type(e).__name__, e)
             out.append({"symbol": symbol})
     return out
 
@@ -1155,7 +1385,7 @@ def analysts(symbols: str = Query(..., description="comma-separated symbols")):
 @app.get("/spot")
 def spot(symbol: str):
     """Most-recent close (Tushare Pro has no realtime quote). 30s cache."""
-    key = f"spot:{symbol}"
+    key = f"spot:{_norm_symbol(symbol)}"
     cached = cache_get(key)
     if cached is not None:
         return cached
@@ -1207,6 +1437,9 @@ def spot(symbol: str):
                 "最低": "low", "收盘": "close", "成交量": "vol",
                 "成交额": "amount", "涨跌幅": "pct_chg",
             })
+            # Take the latest bar deterministically instead of trusting
+            # upstream row order (A-share path below already sorts).
+            df = df.sort_values("trade_date")
         else:
             # A-share fallback when the AkShare/Eastmoney realtime quote is
             # unavailable or too slow.
@@ -1259,7 +1492,7 @@ def spots(symbols: str = Query(..., description="comma-separated symbols")):
     out: list[dict[str, Any]] = []
     missing: list[str] = []
     for symbol in uniq:
-        cached = cache_get(f"spot:{symbol}")
+        cached = cache_get(f"spot:{_norm_symbol(symbol)}")
         if cached is not None:
             out.append(cached)
         else:
@@ -1271,8 +1504,10 @@ def spots(symbols: str = Query(..., description="comma-separated symbols")):
             for future in as_completed(futures):
                 try:
                     out.append(future.result())
-                except Exception:
+                except Exception as e:
                     # Keep a batch refresh useful even if one upstream symbol fails.
+                    failed_symbol = futures[future]
+                    logger.warning("spots batch failed symbol=%s error=%s: %s", failed_symbol, type(e).__name__, e)
                     continue
 
     by_symbol = {str(row.get("symbol")): row for row in out}
