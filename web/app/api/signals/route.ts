@@ -7,7 +7,7 @@ import { readRuntimeJson } from "@/lib/runtimeData";
 import { toExecutableSignals } from "@/lib/signalPolicy";
 import type { SymbolSnapshot } from "@/lib/strategyTypes";
 import { loadActiveEntries } from "@/lib/universe";
-import { hasInternalApiAccess, internalApiDeniedResponse } from "@/lib/apiSecurity";
+import { hasInternalApiAccess, internalApiDeniedResponse, isIsoDateString } from "@/lib/apiSecurity";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
@@ -193,6 +193,12 @@ export async function GET(req: NextRequest) {
     1,
   );
   const requestedAsOf = req.nextUrl.searchParams.get("asOf");
+  if (requestedAsOf !== null && !isIsoDateString(requestedAsOf)) {
+    return NextResponse.json(
+      { error: "asOf must be a valid YYYY-MM-DD date" },
+      { status: 400 },
+    );
+  }
   const asOf = requestedAsOf ?? new Date().toISOString().slice(0, 10);
   const runtimeSnapshot = loadStaticSignalsSnapshot();
   const forceLive = req.nextUrl.searchParams.get("forceLive") === "1";
@@ -227,14 +233,24 @@ export async function GET(req: NextRequest) {
   const spotTimes: string[] = [];
   const snapshots = await mapPool(universe, LOAD_CONCURRENCY, async (entry): Promise<DatedSymbolSnapshot | null> => {
     const [klines, fund, spot] = await Promise.all([
-      fetchKlines(entry.symbol, startDate, endDate).catch(() => []),
-      fetchFundamental(entry.symbol).catch(() => undefined),
-      fetchSpot(entry.symbol).catch(() => null),
+      fetchKlines(entry.symbol, startDate, endDate).catch((e) => {
+        console.error("[api/signals] fetchKlines failed", { symbol: entry.symbol, error: e instanceof Error ? e.message : String(e) });
+        return [];
+      }),
+      fetchFundamental(entry.symbol).catch((e) => {
+        console.error("[api/signals] fetchFundamental failed", { symbol: entry.symbol, error: e instanceof Error ? e.message : String(e) });
+        return undefined;
+      }),
+      fetchSpot(entry.symbol).catch((e) => {
+        console.error("[api/signals] fetchSpot failed", { symbol: entry.symbol, error: e instanceof Error ? e.message : String(e) });
+        return null;
+      }),
     ]);
     if (spot?.source) spotSources[spot.source] = (spotSources[spot.source] ?? 0) + 1;
     if (spot?.as_of) spotTimes.push(spot.as_of);
     const liveKlines = mergeSpotIntoKlines(klines, spot, asOf);
     if (liveKlines.length < 25) {
+      console.warn("[api/signals] skipped symbol: insufficient kline data", { symbol: entry.symbol, name: entry.name, barCount: liveKlines.length, startDate, endDate });
       skipped++;
       return null;
     }

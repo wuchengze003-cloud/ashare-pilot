@@ -1,15 +1,15 @@
 import { NextRequest } from "next/server";
 import { activeEntriesAsOf, readUniverse } from "@/lib/universe";
 import { proposeRefresh } from "@/lib/universe-refresh";
+import { hasConfiguredTokenAccess } from "@/lib/apiSecurity";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
 
 // NDJSON: progress / log / result / error
 export async function POST(req: NextRequest) {
-  const token = process.env.UNIVERSE_REFRESH_TOKEN;
   const provided = req.headers.get("x-universe-refresh-token");
-  if (!token || provided !== token) {
+  if (!hasConfiguredTokenAccess(provided, process.env.UNIVERSE_REFRESH_TOKEN)) {
     return Response.json(
       { error: "Universe refresh is backend-only. Run the server-side research refresh workflow with an internal token." },
       { status: 403 },
@@ -46,6 +46,7 @@ export async function POST(req: NextRequest) {
         });
         controller.close();
       } catch (e) {
+        console.error("[api/universe/refresh] unhandled error during refresh stream", { error: e instanceof Error ? e.message : String(e), stack: e instanceof Error ? e.stack : undefined });
         send({ type: "error", message: e instanceof Error ? e.message : String(e) });
         controller.close();
       }

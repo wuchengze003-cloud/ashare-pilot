@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
 import { loadStrategyEntries } from "@/lib/universe";
 import { fetchKlines, type Kline } from "@/lib/pyserver";
-import { runBacktest, type BacktestConfig, type SymbolSeries } from "@/lib/backtest";
+import { runBacktest, type SymbolSeries } from "@/lib/backtest";
+import { parseBacktestConfigBody } from "@/lib/backtestConfig";
 import { mapPool } from "@/lib/concurrent";
 import { saveBacktestResult } from "@/lib/cache";
 import { hasInternalApiAccess, internalApiDeniedResponse } from "@/lib/apiSecurity";
@@ -19,26 +20,17 @@ export const maxDuration = 300;
 export async function POST(req: NextRequest) {
   if (!hasInternalApiAccess(req.headers)) return internalApiDeniedResponse();
 
-  const body = (await req.json()) as Partial<BacktestConfig> & {
-    startDate: string;
-    endDate: string;
-  };
-
-  const cfg: BacktestConfig = {
-    startCash: body.startCash ?? 1_000_000,
-    rebalanceEveryNDays: body.decisionEveryNDays ?? body.rebalanceEveryNDays ?? 1,
-    decisionEveryNDays: body.decisionEveryNDays ?? body.rebalanceEveryNDays ?? 1,
-    executionPrice: "next_open",
-    startDate: body.startDate,
-    endDate: body.endDate,
-    feeBps: body.feeBps ?? 10,
-    maxPositions: body.maxPositions ?? 5,
-    autoSellUnselected: body.autoSellUnselected ?? true,
-    minHoldBars: body.minHoldBars ?? 5,
-    rebalanceThresholdPct: body.rebalanceThresholdPct ?? 5,
-    sharpeTarget: body.sharpeTarget ?? 3,
-    optimizationWindow: body.optimizationWindow ?? "post_cny_2026",
-  };
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
+  }
+  const parsed = parseBacktestConfigBody(body);
+  if (!parsed.ok) {
+    return Response.json({ error: parsed.error }, { status: 400 });
+  }
+  const cfg = parsed.cfg;
 
   const padStart = new Date(cfg.startDate);
   padStart.setDate(padStart.getDate() - 120);
@@ -97,6 +89,7 @@ export async function POST(req: NextRequest) {
         send({ type: "result", result, stored });
         controller.close();
       } catch (e) {
+        console.error("[api/backtest] unhandled error during backtest stream", { error: e instanceof Error ? e.message : String(e), stack: e instanceof Error ? e.stack : undefined });
         send({ type: "error", message: e instanceof Error ? e.message : String(e) });
         controller.close();
       }
