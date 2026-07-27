@@ -14,6 +14,27 @@ export interface Kline {
   volume: number;
 }
 
+export type MinuteKlineFrequency = "1min" | "5min" | "15min" | "30min" | "60min";
+
+export interface MinuteKline {
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  amount: number;
+}
+
+export interface MinuteKlineSeries {
+  symbol: string;
+  ts_code: string;
+  freq: MinuteKlineFrequency;
+  source: "tushare_stk_mins";
+  realtime: false;
+  bars: MinuteKline[];
+}
+
 export interface Fundamental {
   symbol: string;
   name?: string | null;
@@ -55,6 +76,17 @@ export function fetchKlines(symbol: string, start = "20230101", end?: string) {
   const params: Record<string, string> = { symbol, start, adjust: "qfq" };
   if (end) params.end = end;
   return get<Kline[]>("/klines", params);
+}
+
+export function fetchMinuteKlines(
+  symbol: string,
+  start: string,
+  end?: string,
+  freq: MinuteKlineFrequency = "1min",
+) {
+  const params: Record<string, string> = { symbol, start, freq };
+  if (end) params.end = end;
+  return get<MinuteKlineSeries>("/minute-klines", params);
 }
 
 export function fetchFundamental(symbol: string) {

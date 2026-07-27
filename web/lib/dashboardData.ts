@@ -125,13 +125,15 @@ export function parseFinancialCsv(content: string, category: "growth" | "profita
   return rows;
 }
 
-/** Report disclosure lag used to avoid look-ahead bias. */
-function effectiveDateForReport(reportDate: string): string {
+/** Report disclosure lag used to avoid look-ahead bias. Exported for tests. */
+export function effectiveDateForReport(reportDate: string): string {
   if (reportDate.length !== 8) return reportDate;
   const year = Number(reportDate.slice(0, 4));
   const month = Number(reportDate.slice(4, 6));
   const day = Number(reportDate.slice(6, 8));
-  const d = new Date(year, month - 1, day);
+  // Construct in UTC: a local-time `new Date(y, m, d)` combined with the UTC
+  // setters below shifts the result by one day whenever the server TZ is not UTC.
+  const d = new Date(Date.UTC(year, month - 1, day));
   // Approximate regulatory disclosure deadlines:
   // Annual (1231) -> end of April; H1 (0630) -> end of August;
   // Q1 (0331) -> end of April; Q3 (0930) -> end of October.

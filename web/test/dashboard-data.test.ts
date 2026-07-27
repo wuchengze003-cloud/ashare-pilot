@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import Database from "better-sqlite3";
-import { buildSymbolSeriesFromPyserverCache } from "../lib/dashboardData";
+import { buildSymbolSeriesFromPyserverCache, effectiveDateForReport } from "../lib/dashboardData";
 
 function makeRows(start: string, count: number, firstClose: number) {
   const d = new Date(`${start}T00:00:00Z`);
@@ -81,4 +81,17 @@ test("pyserver cache loader reads CSI 300 benchmark from sh-prefixed key", () =>
 
   assert.equal(benchmark.length, 36);
   assert.equal(benchmark.at(-1)?.ticker, "000300.SH");
+});
+
+test("effectiveDateForReport applies disclosure lags independent of server TZ", () => {
+  // Annual report 1231 + 120 days -> next-year 04-30
+  assert.equal(effectiveDateForReport("20251231"), "20260430");
+  // H1 report 0630 + 62 days -> 08-31
+  assert.equal(effectiveDateForReport("20260630"), "20260831");
+  // Q3 report 0930 + 30 days -> 10-30
+  assert.equal(effectiveDateForReport("20260930"), "20261030");
+  // Q1 report 0331 + 30 days -> 04-30
+  assert.equal(effectiveDateForReport("20260331"), "20260430");
+  // Malformed input passes through unchanged
+  assert.equal(effectiveDateForReport("2026-06-30"), "2026-06-30");
 });
