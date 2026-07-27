@@ -1,0 +1,35 @@
+services:
+  pyserver:
+    build:
+      context: ./pyserver
+    env_file:
+      - ./pyserver/.env
+    environment:
+      PYSERVER_DB_PATH: /data/cache.db
+    volumes:
+      - pyserver-cache:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  web:
+    build:
+      context: ./web
+    environment:
+      PYSERVER_URL: http://pyserver:8001
+      RUNTIME_DATA_DIR: /app/data/runtime
+      NEXT_PUBLIC_SITE_URL: http://localhost:3100
+    depends_on:
+      pyserver:
+        condition: service_healthy
+    ports:
+      - "3100:3000"
+    volumes:
+      - web-runtime:/app/data/runtime
+
+volumes:
+  pyserver-cache:
+  web-runtime:

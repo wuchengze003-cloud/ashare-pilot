@@ -1,12 +1,21 @@
 import { NextRequest } from "next/server";
-import { readUniverse } from "@/lib/universe";
-import { proposeRefresh, applyRefresh } from "@/lib/universe-refresh";
+import { activeEntriesAsOf, readUniverse } from "@/lib/universe";
+import { proposeRefresh } from "@/lib/universe-refresh";
+import { hasConfiguredTokenAccess } from "@/lib/apiSecurity";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
 
 // NDJSON: progress / log / result / error
-export async function POST(_req: NextRequest) {
+export async function POST(req: NextRequest) {
+  const provided = req.headers.get("x-universe-refresh-token");
+  if (!hasConfiguredTokenAccess(provided, process.env.UNIVERSE_REFRESH_TOKEN)) {
+    return Response.json(
+      { error: "Universe refresh is backend-only. Run the server-side research refresh workflow with an internal token." },
+      { status: 403 },
+    );
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -15,7 +24,9 @@ export async function POST(_req: NextRequest) {
       };
       try {
         const current = readUniverse();
-        send({ type: "log", message: `当前股票池 ${current.entries.length} 只，请求 DeepSeek 提议变更…` });
+        const today = new Date().toISOString().slice(0, 10);
+        const activeCount = activeEntriesAsOf(current.entries, today).length;
+        send({ type: "log", message: `当前正式池 ${activeCount} 只，请求 DeepSeek 提议变更…` });
 
         const proposal = await proposeRefresh(current);
         send({
@@ -24,26 +35,18 @@ export async function POST(_req: NextRequest) {
         });
         send({ type: "log", message: proposal.rationale });
 
-        let validated = 0;
-        const total = proposal.adds.filter(
-          (a) => a.symbol && !current.entries.some((e) => e.symbol === a.symbol),
-        ).length;
-        send({ type: "progress", done: 0, total });
-
-        const result = await applyRefresh(current, proposal, {
-          onValidate: (symbol, ok) => {
-            validated++;
-            send({
-              type: "log",
-              message: `${ok ? "✓" : "✗"} 验证 ${symbol}`,
-            });
-            send({ type: "progress", done: validated, total });
+        send({
+          type: "result",
+          result: {
+            proposal,
+            applied: false,
+            requires_manual_review: true,
+            message: "候选变更已生成，未写入正式股票池。",
           },
         });
-
-        send({ type: "result", result });
         controller.close();
       } catch (e) {
+        console.error("[api/universe/refresh] unhandled error during refresh stream", { error: e instanceof Error ? e.message : String(e), stack: e instanceof Error ? e.stack : undefined });
         send({ type: "error", message: e instanceof Error ? e.message : String(e) });
         controller.close();
       }

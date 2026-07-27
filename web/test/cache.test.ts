@@ -84,7 +84,20 @@ test("saveBacktestResult stores and returns a full backtest result", () => {
       { date: "2025-01-02", equity: 1_010_000, cash: 10_000, positions: { A: { shares: 9900, price: 101 } } },
     ],
     trades: [
-      { date: "2025-01-02", symbol: "A", side: "buy", shares: 9900, price: 101 },
+      {
+        date: "2025-01-02",
+        decisionDate: "2025-01-01",
+        tradeDate: "2025-01-02",
+        priceField: "open",
+        symbol: "A",
+        side: "buy",
+        shares: 9900,
+        price: 101,
+        reason: "test",
+        targetWeightBefore: 0,
+        targetWeightAfter: 1,
+        pnlPct: null,
+      },
     ],
     signalsByDate: {
       "2025-01-02": [
@@ -97,6 +110,8 @@ test("saveBacktestResult stores and returns a full backtest result", () => {
       maxDrawdownPct: 0,
       sharpe: 1.5,
       trades: 1,
+      winRatePct: 0,
+      turnoverPct: 100,
     },
   };
 
@@ -126,6 +141,8 @@ test("listBacktestResults returns newest summaries first", () => {
       maxDrawdownPct: -1,
       sharpe: 0.8,
       trades: 0,
+      winRatePct: 0,
+      turnoverPct: 0,
     },
   };
   const first = saveBacktestResult(base);

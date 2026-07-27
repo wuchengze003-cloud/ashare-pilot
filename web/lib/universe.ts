@@ -12,6 +12,16 @@ export interface UniverseEntry {
   /** Does the company sell into the global AI supply chain (NVIDIA, AMD,
    *  Apple, Google, hyperscalers) — vs. domestic-only revenue. */
   global_supply?: boolean;
+  /** Current curation tier. Watch entries never enter live scoring unless they
+   *  also carry a historical strategy_until boundary. */
+  pool_tier?: "core" | "watch";
+  /** Inclusive point-in-time strategy membership boundaries. */
+  strategy_from?: string;
+  strategy_until?: string;
+  /** Preserve the historical theme when a classification changes. */
+  previous_theme?: string;
+  theme_effective_from?: string;
+  review_reason?: string;
 }
 
 export interface UniverseFile {
@@ -36,7 +46,56 @@ export function writeUniverse(file: UniverseFile): void {
   fs.renameSync(tmp, FILE);
 }
 
-/** Convenience accessor for callers that only want the entries. */
+function shanghaiToday(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+export function isStrategyEntryAsOf(entry: UniverseEntry, asOf: string): boolean {
+  const hasHistoricalRange = Boolean(entry.strategy_from || entry.strategy_until);
+  if (entry.pool_tier === "watch" && !hasHistoricalRange) return false;
+  if (entry.strategy_from && asOf < entry.strategy_from) return false;
+  if (entry.strategy_until && asOf > entry.strategy_until) return false;
+  return true;
+}
+
+export function resolveEntryAsOf(entry: UniverseEntry, asOf: string): UniverseEntry {
+  if (
+    entry.previous_theme &&
+    entry.theme_effective_from &&
+    asOf < entry.theme_effective_from
+  ) {
+    return { ...entry, theme: entry.previous_theme };
+  }
+  return entry;
+}
+
+export function activeEntriesAsOf(entries: UniverseEntry[], asOf: string): UniverseEntry[] {
+  return entries
+    .filter((entry) => isStrategyEntryAsOf(entry, asOf))
+    .map((entry) => resolveEntryAsOf(entry, asOf));
+}
+
+/** All curated records, including current watch candidates. */
 export function loadEntries(): UniverseEntry[] {
   return readUniverse().entries;
+}
+
+/** Entries that participate in at least one historical or current strategy period. */
+export function loadStrategyEntries(): UniverseEntry[] {
+  return loadEntries().filter(
+    (entry) => entry.pool_tier !== "watch" || Boolean(entry.strategy_from || entry.strategy_until),
+  );
+}
+
+export function loadActiveEntries(asOf = shanghaiToday()): UniverseEntry[] {
+  return activeEntriesAsOf(loadEntries(), asOf);
+}
+
+export function loadWatchEntries(): UniverseEntry[] {
+  return loadEntries().filter((entry) => entry.pool_tier === "watch");
 }

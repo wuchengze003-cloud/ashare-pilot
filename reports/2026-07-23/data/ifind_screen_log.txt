@@ -1,0 +1,5 @@
+{'type': 'text', 'text': "API_NOT_FOUND - 'ifind_intelligent_stock_screening' not found in data source 'ifind'. Available APIs: ifind_get_stock_info, ifind_get_financial_statements, ifind_get_stock_business_segmentation, ifind_get_stock_financial_index, ifind_get_price, ifind_get_forecast, ifind_get_stock_announcement, ifind_get_holder_info, ifind_get_stock_realtime_price"}
+
+real	0m0.321s
+user	0m0.088s
+sys	0m0.022s

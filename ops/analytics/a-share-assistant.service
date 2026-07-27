@@ -1,0 +1,39 @@
+[Unit]
+Description=A Share Assistant Next.js app
+After=network.target
+
+[Service]
+Type=simple
+User=a-share
+Group=a-share
+WorkingDirectory=/opt/a-share-assistant-web/current/web
+EnvironmentFile=/etc/a-share-assistant/a-share.env
+Environment=NODE_ENV=production
+Environment=NEXT_BASE_PATH=/a-share
+ExecStart=/usr/bin/npm run start -- --hostname 127.0.0.1 --port 3101
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+UMask=0027
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/opt/a-share-assistant-web/current/web/.cache /opt/a-share-assistant-web/current/web/.next/cache
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryHigh=384M
+MemoryMax=512M
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

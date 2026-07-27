@@ -1,13 +1,16 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import Analytics from "./Analytics";
+
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3100";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://madeye.github.io/silicon-civilization-stock-trade/"),
+  metadataBase: new URL(siteUrl),
   title: {
     default: "硅基文明消费股交易系统",
     template: "%s · 硅基文明消费股交易系统",
   },
-  description: "DeepSeek、Tushare 与 AkShare 驱动的 A 股主题股票池、目标价、信号与回测系统。",
+  description: "Dashboard 规则评分、行情通道、规则测算目标价、A 股主题股票池、实时信号与回测系统。",
   icons: {
     icon: [
       { url: "/icon.svg", type: "image/svg+xml" },
@@ -20,7 +23,7 @@ export const metadata: Metadata = {
     locale: "zh_CN",
     siteName: "硅基文明消费股交易系统",
     title: "硅基文明消费股交易系统",
-    description: "A 股硅基文明消费主题股票池、分析师目标价、DeepSeek 信号与策略回测。",
+    description: "A 股硅基文明消费主题股票池、规则测算目标价、实时规则信号与策略回测。",
     url: "/",
     images: [
       {
@@ -34,7 +37,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "硅基文明消费股交易系统",
-    description: "A 股硅基文明消费主题股票池、分析师目标价、DeepSeek 信号与策略回测。",
+    description: "A 股硅基文明消费主题股票池、规则测算目标价、实时规则信号与策略回测。",
     images: ["/social-card.png"],
   },
 };
@@ -42,7 +45,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>
+        {children}
+        <Analytics />
+      </body>
     </html>
   );
 }

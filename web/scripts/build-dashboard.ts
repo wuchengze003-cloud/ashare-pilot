@@ -1,38 +1,97 @@
-// Build the dashboard backtest data file using cached data-source CSVs.
+// Build ignored runtime dashboard snapshots.
 //
-// Data fetching is done by the agent via the kimi-datasource MCP plugin because
-// the plugin is only available in the agent runtime. The fetched CSVs should be
-// placed in:
-//   web/.cache/datasource/prices/      (one CSV per batch from get_price)
-//   web/.cache/datasource/financials/  (growth + profitability CSVs)
-//
-// Then run:
-//   cd web && npx tsx scripts/build-dashboard.ts
+// Daily entry:
+//   cd web && npm run dashboard:update
 //
 // Env overrides:
-//   DASHBOARD_START=2024-01-01  DASHBOARD_END=2026-06-12
-//   DASHBOARD_REBALANCE=30      DASHBOARD_MAX_POSITIONS=6
-//   DASHBOARD_MIN_HOLD_BARS=45  DASHBOARD_REBALANCE_THRESHOLD_PCT=5
+//   DASHBOARD_START=2026-02-24  DASHBOARD_END=2026-06-12
+//   DASHBOARD_INTRADAY=1        # explicitly mark a pre-close run as intraday
+//   DASHBOARD_DECISION_EVERY=1  DASHBOARD_MAX_POSITIONS=4
+//   DASHBOARD_MIN_HOLD_BARS=5   DASHBOARD_REBALANCE_THRESHOLD_PCT=5
+//   DASHBOARD_MIN_SCORE_TO_BUY=0.54
+//   DASHBOARD_OPTIMIZE=1        # diagnostic only; daily runs keep fixed params by default
 //   DASHBOARD_CACHE=.cache/datasource
 import fs from "node:fs";
 import path from "node:path";
-import { loadEntries } from "../lib/universe";
+import {
+  activeEntriesAsOf,
+  loadStrategyEntries,
+  resolveEntryAsOf,
+  type UniverseEntry,
+} from "../lib/universe";
 import { runBacktest, type BacktestConfig, type BacktestResult } from "../lib/backtest";
 import { ruleBasedScorer } from "../lib/dashboardBacktest";
-import { buildSymbolSeries, type PriceRow } from "../lib/dashboardData";
+import { optimizeBacktest, type OptimizationResult } from "../lib/backtestOptimization";
+import { buildLatestPlan, buildPromotedModelPlan, type LatestPlan } from "../lib/latestPlan";
+import { modelSnapshotForDate } from "../lib/mlShadow";
+import { readRuntimeJson, writeRuntimeJson } from "../lib/runtimeData";
+import {
+  buildSignalHistorySnapshot,
+  readSignalHistorySnapshots,
+  writeSignalHistorySnapshot,
+} from "../lib/signalHistory";
+import { assertRuntimeArtifacts, readRuntimeValidationInput } from "../lib/runtimeValidation";
+import {
+  buildSymbolSeries,
+  buildSymbolSeriesFromPyserverCache,
+  type PriceRow,
+} from "../lib/dashboardData";
 
-const today = new Date().toISOString().slice(0, 10);
-const startDate = process.env.DASHBOARD_START ?? "2024-01-01";
-const endDate = process.env.DASHBOARD_END ?? today;
-const rebalanceEveryNDays = Number(process.env.DASHBOARD_REBALANCE ?? 30);
-const maxPositions = Number(process.env.DASHBOARD_MAX_POSITIONS ?? 6);
-const minHoldBars = Number(process.env.DASHBOARD_MIN_HOLD_BARS ?? 45);
+function shanghaiNowParts() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(new Date());
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
+  return {
+    date: `${get("year")}-${get("month")}-${get("day")}`,
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+  };
+}
+
+function beforeShanghaiClose(): boolean {
+  const now = shanghaiNowParts();
+  return now.hour < 15;
+}
+
+function latestAvailableDate(dates: string[], requestedEndDate: string): string {
+  const today = shanghaiNowParts().date;
+  const filtered = dates
+    .filter((d) => d <= requestedEndDate)
+    .filter((d) => (beforeShanghaiClose() ? d < today : true))
+    .sort();
+  return filtered.at(-1) ?? requestedEndDate;
+}
+
+const today = shanghaiNowParts().date;
+const explicitEndDate = Boolean(process.env.DASHBOARD_END);
+const startDate = process.env.DASHBOARD_START ?? "2026-02-24";
+const requestedEndDate = process.env.DASHBOARD_END ?? today;
+const intradayOverride = process.env.DASHBOARD_INTRADAY;
+const isIntradaySnapshot =
+  intradayOverride === "1" ||
+  (intradayOverride !== "0" && explicitEndDate && requestedEndDate === today && beforeShanghaiClose());
+const snapshotBasis = isIntradaySnapshot ? "intraday-midday" : "latest-complete-close";
+const snapshotLabel = isIntradaySnapshot ? "午盘快照" : "完整收盘";
+const decisionEveryNDays = Number(process.env.DASHBOARD_DECISION_EVERY ?? process.env.DASHBOARD_REBALANCE ?? 1);
+const maxPositions = Number(process.env.DASHBOARD_MAX_POSITIONS ?? 4);
+const minHoldBars = Number(process.env.DASHBOARD_MIN_HOLD_BARS ?? 5);
 const rebalanceThresholdPct = Number(process.env.DASHBOARD_REBALANCE_THRESHOLD_PCT ?? 5);
+const minScoreToBuy = Number(process.env.DASHBOARD_MIN_SCORE_TO_BUY ?? 0.54);
+const shouldOptimize = process.env.DASHBOARD_OPTIMIZE === "1";
 const cacheDir = path.resolve(process.cwd(), process.env.DASHBOARD_CACHE ?? ".cache/datasource");
-const outFile = path.resolve(process.cwd(), "data", "dashboard-backtest.json");
+const pyserverCacheDb = path.resolve(process.cwd(), process.env.PYSERVER_CACHE_DB ?? "../pyserver/cache.db");
 
 interface DashboardOutput {
   generated_at: string;
+  snapshot_basis?: "latest-complete-close" | "intraday-midday";
+  snapshot_label?: string;
   config: BacktestConfig;
   stats: BacktestResult["stats"];
   equityCurve: BacktestResult["equityCurve"];
@@ -47,8 +106,16 @@ interface DashboardOutput {
     avgWeightPct: number;
   }>;
   signalsByDate: BacktestResult["signalsByDate"];
+  latestPlan: LatestPlan;
   latestHoldings: BacktestResult["equityCurve"][number]["positions"];
   latestDate: string;
+  meetsSharpeTarget?: boolean;
+  primaryWindow?: string;
+  validationStats?: OptimizationResult["validationStats"];
+  optimizedParams?: OptimizationResult["optimizedParams"];
+  optimizationWarnings?: string[];
+  optimizationCandidates?: OptimizationResult["candidates"];
+  researchStatus?: Record<string, unknown> | null;
 }
 
 function computeBenchmarkCurve(benchmark: PriceRow[], cfg: BacktestConfig) {
@@ -63,9 +130,13 @@ function computeBenchmarkCurve(benchmark: PriceRow[], cfg: BacktestConfig) {
 
 function computeThemePerformance(
   result: BacktestResult,
-  series: Array<{ entry: { symbol: string; theme: string } }>,
+  series: Array<{ entry: UniverseEntry }>,
 ): DashboardOutput["themePerformance"] {
-  const themeMap = new Map(series.map((s) => [s.entry.symbol, s.entry.theme]));
+  const entryMap = new Map(series.map((s) => [s.entry.symbol, s.entry]));
+  const themeAt = (symbol: string, date: string) => {
+    const entry = entryMap.get(symbol);
+    return entry ? resolveEntryAsOf(entry, date).theme : "未分类";
+  };
   const realized: Record<string, number> = {};
   const unrealized: Record<string, number> = {};
   const allocationDays: Record<string, number> = {};
@@ -75,7 +146,7 @@ function computeThemePerformance(
   // unrealized P&L per theme.
   const positions: Record<string, { shares: number; cost: number }> = {};
   for (const t of result.trades) {
-    const theme = themeMap.get(t.symbol) ?? "未分类";
+    const theme = themeAt(t.symbol, t.decisionDate ?? t.tradeDate ?? t.date);
     realized[theme] ??= 0;
     positions[t.symbol] ??= { shares: 0, cost: 0 };
     if (t.side === "buy") {
@@ -97,7 +168,7 @@ function computeThemePerformance(
   const lastBar = result.equityCurve[result.equityCurve.length - 1];
   for (const [sym, pos] of Object.entries(positions)) {
     if (pos.shares <= 0) continue;
-    const theme = themeMap.get(sym) ?? "未分类";
+    const theme = themeAt(sym, lastBar.date);
     const latestPrice = lastBar.positions[sym]?.price;
     if (latestPrice === undefined) continue;
     const avgCost = pos.cost / pos.shares;
@@ -109,7 +180,7 @@ function computeThemePerformance(
   for (const bar of result.equityCurve) {
     const totalEquity = bar.equity || 1;
     for (const [sym, pos] of Object.entries(bar.positions)) {
-      const theme = themeMap.get(sym) ?? "未分类";
+      const theme = themeAt(sym, bar.date);
       allocationDays[theme] ??= 0;
       weights[theme] ??= 0;
       allocationDays[theme] += 1;
@@ -137,28 +208,36 @@ function computeThemePerformance(
 }
 
 async function main() {
-  if (!fs.existsSync(cacheDir)) {
-    console.error(`Cache directory not found: ${cacheDir}`);
-    console.error(
-      "Please fetch data-source CSVs first. See AGENTS.md for the dashboard data-fetching steps.",
-    );
-    process.exit(1);
-  }
-
-  const universe = loadEntries();
+  const universe = loadStrategyEntries();
   console.log(`Loaded ${universe.length} universe entries`);
 
-  const { series, benchmark } = buildSymbolSeries(universe, cacheDir);
-  console.log(`Built ${series.length} price series, benchmark ${benchmark.length} bars`);
+  const source = fs.existsSync(cacheDir)
+    ? `data-source CSVs at ${cacheDir}`
+    : `pyserver SQLite cache at ${pyserverCacheDb}`;
+  const { series, benchmark } = fs.existsSync(cacheDir)
+    ? buildSymbolSeries(universe, cacheDir)
+    : buildSymbolSeriesFromPyserverCache(universe, pyserverCacheDb);
+  console.log(`Built ${series.length} price series, benchmark ${benchmark.length} bars from ${source}`);
 
   if (series.length === 0) {
-    console.error("No usable price series found. Check cached CSVs in", cacheDir);
+    console.error("No usable price series found. Check cached CSVs or pyserver cache.");
     process.exit(1);
   }
+  const allDates = [...new Set(series.flatMap((s) => s.klines.map((k) => k.date)))].sort();
+  const endDate = explicitEndDate ? requestedEndDate : latestAvailableDate(allDates, requestedEndDate);
+  const latestCompleteDate = isIntradaySnapshot
+    ? [...new Set(benchmark.map((row) => row.date))]
+        .filter((date) => date < today && date <= requestedEndDate)
+        .sort()
+        .at(-1) ?? latestAvailableDate(allDates, requestedEndDate)
+    : endDate;
+  const activeUniverse = activeEntriesAsOf(universe, endDate);
 
   const cfg: BacktestConfig = {
     startCash: 1_000_000,
-    rebalanceEveryNDays,
+    rebalanceEveryNDays: decisionEveryNDays,
+    decisionEveryNDays,
+    executionPrice: "next_open",
     startDate,
     endDate,
     feeBps: 10,
@@ -166,28 +245,122 @@ async function main() {
     autoSellUnselected: true,
     minHoldBars,
     rebalanceThresholdPct,
+    sharpeTarget: 3,
+    optimizationWindow: "post_cny_2026",
+  };
+  const historicalSignalsByDate = Object.fromEntries(
+    readSignalHistorySnapshots(Number.POSITIVE_INFINITY)
+      .filter((snapshot) => snapshot.signal_date < endDate)
+      .map((snapshot) => [snapshot.signal_date, snapshot.signals]),
+  );
+  const runOptions = {
+    scorer: ruleBasedScorer({ minScoreToBuy }),
+    historicalSignalsByDate,
   };
 
-  const result = await runBacktest(series, cfg, { scorer: ruleBasedScorer() });
-  const benchmarkCurve = computeBenchmarkCurve(benchmark, cfg);
+  const optimized = shouldOptimize
+    ? await optimizeBacktest(series, cfg)
+    : {
+      result: await runBacktest(series, cfg, runOptions),
+      optimization: null,
+    };
+  const result = optimized.result;
+  const benchmarkCurve = computeBenchmarkCurve(benchmark, result.config);
 
   const lastBar = result.equityCurve[result.equityCurve.length - 1];
+  const effectiveMinScoreToBuy = optimized.optimization?.optimizedParams.minScoreToBuy ?? minScoreToBuy;
+  const baseLatestPlan = await buildLatestPlan(series, {
+    decisionDate: lastBar.date,
+    scorer: ruleBasedScorer({ minScoreToBuy: effectiveMinScoreToBuy }),
+    maxPositions: result.config.maxPositions,
+    minScoreToBuy: effectiveMinScoreToBuy,
+  });
+  const championModel = modelSnapshotForDate(lastBar.date, "champion");
+  const shadowModel = modelSnapshotForDate(lastBar.date, "challenger");
+  const executablePlan = championModel
+    ? buildPromotedModelPlan(championModel, result.config.maxPositions)
+    : baseLatestPlan;
+  const latestPlan: LatestPlan = shadowModel
+    ? { ...executablePlan, shadowModel }
+    : executablePlan;
   const output: DashboardOutput = {
     generated_at: new Date().toISOString(),
-    config: cfg,
+    snapshot_basis: snapshotBasis,
+    snapshot_label: snapshotLabel,
+    config: result.config,
     stats: result.stats,
     equityCurve: result.equityCurve,
     benchmarkCurve,
     trades: result.trades,
     themePerformance: computeThemePerformance(result, series),
     signalsByDate: result.signalsByDate,
+    latestPlan,
     latestHoldings: lastBar.positions,
     latestDate: lastBar.date,
+    meetsSharpeTarget: result.stats.sharpe >= (result.config.sharpeTarget ?? 3),
+    primaryWindow: "post_cny_2026",
+    validationStats: optimized.optimization?.validationStats,
+    optimizedParams: optimized.optimization?.optimizedParams ?? {
+      maxPositions: result.config.maxPositions,
+      minHoldBars: result.config.minHoldBars ?? 0,
+      rebalanceThresholdPct: result.config.rebalanceThresholdPct ?? 0,
+      minScoreToBuy: effectiveMinScoreToBuy,
+    },
+    optimizationWarnings: optimized.optimization?.warnings ?? [],
+    optimizationCandidates: optimized.optimization?.candidates ?? [],
+    researchStatus: readRuntimeJson<Record<string, unknown>>("ml/status.json"),
   };
 
-  fs.mkdirSync(path.dirname(outFile), { recursive: true });
-  fs.writeFileSync(outFile, JSON.stringify(output, null, 2) + "\n", "utf-8");
-  console.log(`Wrote dashboard backtest to ${outFile}`);
+  writeRuntimeJson("backtest.json", output);
+  const signalsOutput = {
+    generated_at: new Date().toISOString(),
+    source: latestPlan.source,
+    score_model: latestPlan.scoreModel,
+    signal_date: latestPlan.decisionDate,
+    latest_complete_date: latestCompleteDate,
+    signal_basis: snapshotBasis,
+    snapshot_label: snapshotLabel,
+    max_positions: latestPlan.maxPositions,
+    optimized_params: optimized.optimization?.optimizedParams ?? {
+      maxPositions: result.config.maxPositions,
+      minHoldBars: result.config.minHoldBars ?? 0,
+      rebalanceThresholdPct: result.config.rebalanceThresholdPct ?? 0,
+      minScoreToBuy: effectiveMinScoreToBuy,
+    },
+    universe_count: activeUniverse.length,
+    scored_count: latestPlan.signals.length,
+    skipped_count: Math.max(0, activeUniverse.length - latestPlan.signals.length),
+    shadow_model: shadowModel
+      ? {
+        stage: shadowModel.stage,
+        model_version: shadowModel.model_version,
+        feature_version: shadowModel.feature_version,
+        data_cutoff: shadowModel.data_cutoff,
+      }
+      : null,
+    champion_model: championModel
+      ? {
+        stage: championModel.stage,
+        model_version: championModel.model_version,
+        feature_version: championModel.feature_version,
+        data_cutoff: championModel.data_cutoff,
+      }
+      : null,
+    fundamentals: [],
+    signals: latestPlan.signals,
+  };
+  writeRuntimeJson("signals.json", signalsOutput);
+  writeSignalHistorySnapshot(buildSignalHistorySnapshot(latestPlan, series));
+  writeRuntimeJson("meta.json", {
+    generated_at: new Date().toISOString(),
+    universe_count: activeUniverse.length,
+  });
+  assertRuntimeArtifacts(readRuntimeValidationInput());
+  console.log("Wrote runtime backtest/signals/history/meta to web/data/runtime");
+  console.log(
+    `Latest plan: ${latestPlan.decisionDate} ${snapshotLabel} -> next open, ` +
+      `${latestPlan.signals.filter((s) => s.action === "buy").length} buys`,
+  );
   console.log(
     `Return: ${result.stats.totalReturnPct.toFixed(2)}%  ` +
       `CAGR: ${result.stats.cagrPct.toFixed(2)}%  ` +

@@ -1,0 +1,5 @@
+{'type': 'text', 'text': '{\n  "is_success": "ifind, [\'# HTTP get_stock_realtime_price OK\', \'ticker: 300308.SZ,688256.SH\', \'endpoint: history_data\', \'timestamp: 2026-07-23T15:29:18.364673+08:00\', \'status_code: 200\', \'attempt: 0\', \'\', \'# data preview (2 rows here, 2 rows in total)\', \'\']",\n  "data_preview": "pre_close,open,high,low,close,vwap,chg,pct_chg,volume,amt,turn,thscode,time\\n1060.8,1089.54,1115,1060,1072.52,1084.5422750069,11.72,1.104826546003,27254102,29558225786.35,2.4554577230405,300308.SZ,2026-07-23\\n1310.0,1336.0,1336,1233,1249.0,1266.7503586382,-61.0,-4.6564885496183,10861225,13758460664.0,1.7286879745427,688256.SH,2026-07-23\\n",\n  "notice": "All the data have been provided and can be used directly. And above table saved to ifind_close_summary.csv.If the user has the need for analysis, you can use pandas to read the file."\n}'}
+
+real	0m0.751s
+user	0m0.091s
+sys	0m0.025s

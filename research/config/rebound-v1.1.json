@@ -1,0 +1,73 @@
+{
+  "version": "1.1",
+  "description": "低位反弹事件研究 V1.1 预注册配置",
+  "data_window": {
+    "development": {"start": "2025-01-01", "end": "2025-09-30"},
+    "validation": {"start": "2025-10-01", "end": "2026-02-23"},
+    "frozen": {"start": "2026-02-24", "end": "latest"}
+  },
+  "event_thresholds": {
+    "min_listing_days": 60,
+    "max_60d_position_pct": 25.0,
+    "min_60d_drawdown_pct": 20.0,
+    "max_5d_return_pct": -6.0,
+    "min_20d_avg_amount": 50000000.0
+  },
+  "entry_strategies": [
+    {
+      "name": "next_open",
+      "description": "D+1开盘买入，抄底基线"
+    },
+    {
+      "name": "vwap_reclaim",
+      "description": "09:45后连续2根5分钟收盘站上累计VWAP，下一bar开盘买入",
+      "min_confirm_time": "09:45:00",
+      "consecutive_bars": 2,
+      "latest_entry_time": "14:30:00"
+    },
+    {
+      "name": "higher_low_breakout",
+      "description": "09:45后形成高于前低的5分钟低点，收盘站上VWAP并突破前一根最高价",
+      "min_confirm_time": "09:45:00",
+      "latest_entry_time": "14:30:00"
+    }
+  ],
+  "hold_periods": [1, 3, 5],
+  "cancel_conditions": {
+    "gap_up_pct": 3.0,
+    "no_confirmation": true,
+    "limit_up": true,
+    "suspended": true,
+    "data_missing": true,
+    "capacity_insufficient": true
+  },
+  "exit_rules": {
+    "stop_loss_pct": 5.0,
+    "stop_confirmation": "5min_close",
+    "stop_execution": "next_bar_open",
+    "hold_expire_execution": "next_trading_day_first_bar"
+  },
+  "execution": {
+    "fee_bps": 10.0,
+    "slippage_bps": 5.0,
+    "capacity_pct": 1.0,
+    "lot_size": 100,
+    "t_plus_1": true
+  },
+  "portfolio": {
+    "risk_budget_pct": 0.5,
+    "position_cap_pct": 5.0,
+    "portfolio_capital": 100000.0,
+    "capital_per_trade": 10000.0
+  },
+  "selection_rules": {
+    "min_val_trades": 30,
+    "min_frozen_trading_days": 250,
+    "min_frozen_events": 100,
+    "primary_sort": "expected_profit_per_100k",
+    "tiebreak_1": "return_cvar_ratio",
+    "tiebreak_2": "max_drawdown_smaller"
+  },
+  "bootstrap_seed": 42,
+  "freq": "5min"
+}

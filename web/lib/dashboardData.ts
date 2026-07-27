@@ -6,6 +6,7 @@
 // SymbolSeries structure expected by lib/backtest.ts.
 import fs from "node:fs";
 import path from "node:path";
+import Database from "better-sqlite3";
 import type { Kline } from "./pyserver";
 import type { FundamentalSnapshot, SymbolSeries } from "./backtest";
 import type { UniverseEntry } from "./universe";
@@ -33,6 +34,10 @@ export interface FinancialRow {
 export function toDataSourceTicker(symbol: string): string {
   const s = symbol.trim();
   if (/\.(SH|SZ|BJ|HK)$/i.test(s)) return s.toUpperCase();
+  if (/^sh/i.test(s)) return `${s.slice(2)}.SH`;
+  if (/^sz/i.test(s)) return `${s.slice(2)}.SZ`;
+  if (/^bj/i.test(s)) return `${s.slice(2)}.BJ`;
+  if (/^hk/i.test(s)) return `${s.slice(2).padStart(5, "0")}.HK`;
   if (/^(60|68|9)/.test(s)) return `${s}.SH`;
   if (/^(00|30|20)/.test(s)) return `${s}.SZ`;
   if (/^(4|8|92)/.test(s)) return `${s}.BJ`;
@@ -72,7 +77,10 @@ export function parsePriceCsv(content: string): PriceRow[] {
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(",");
     const date = cols[idx.time]?.trim();
-    if (!date) continue;
+    if (!date) {
+      console.warn("[dashboardData:parsePriceCsv] skipped row: missing date", { line: i + 1, ticker: cols[idx.ticker]?.trim() ?? "unknown" });
+      continue;
+    }
     rows.push({
       date,
       open: parseNumber(cols[idx.open]) ?? 0,
@@ -110,7 +118,10 @@ export function parseFinancialCsv(content: string, category: "growth" | "profita
     const cols = lines[i].split(",");
     const ticker = cols[tickerIdx]?.trim();
     const reportDate = cols[timeIdx]?.trim();
-    if (!ticker) continue;
+    if (!ticker) {
+      console.warn("[dashboardData:parseFinancialCsv] skipped row: missing ticker", { category, line: i + 1, reportDate });
+      continue;
+    }
     const value = parseNumber(cols[valueIdx]);
     const base: FinancialRow = { ticker, reportDate };
     if (category === "growth") base.profitYoy = value;
@@ -120,13 +131,15 @@ export function parseFinancialCsv(content: string, category: "growth" | "profita
   return rows;
 }
 
-/** Report disclosure lag used to avoid look-ahead bias. */
-function effectiveDateForReport(reportDate: string): string {
+/** Report disclosure lag used to avoid look-ahead bias. Exported for tests. */
+export function effectiveDateForReport(reportDate: string): string {
   if (reportDate.length !== 8) return reportDate;
   const year = Number(reportDate.slice(0, 4));
   const month = Number(reportDate.slice(4, 6));
   const day = Number(reportDate.slice(6, 8));
-  const d = new Date(year, month - 1, day);
+  // Construct in UTC: a local-time `new Date(y, m, d)` combined with the UTC
+  // setters below shifts the result by one day whenever the server TZ is not UTC.
+  const d = new Date(Date.UTC(year, month - 1, day));
   // Approximate regulatory disclosure deadlines:
   // Annual (1231) -> end of April; H1 (0630) -> end of August;
   // Q1 (0331) -> end of April; Q3 (0930) -> end of October.
@@ -154,7 +167,10 @@ export function buildFundamentals(
   for (const g of growthRows) {
     if (g.profitYoy == null) continue;
     const p = profitByKey.get(`${g.ticker}|${g.reportDate}`);
-    if (!p || p.eps == null || p.eps <= 0) continue;
+    if (!p || p.eps == null || p.eps <= 0) {
+      console.warn("[dashboardData:buildFundamentals] skipped fundamental: missing/invalid EPS", { ticker: g.ticker, reportDate: g.reportDate, eps: p?.eps ?? null });
+      continue;
+    }
 
     const ticker = g.ticker;
     const prices = priceMap.get(ticker);
@@ -242,7 +258,10 @@ export function buildSymbolSeries(
   const series: SymbolSeries[] = [];
   for (const entry of entries) {
     const rows = priceMap.get(entry.symbol);
-    if (!rows || rows.length < 30) continue;
+    if (!rows || rows.length < 30) {
+      console.warn("[dashboardData:buildSymbolSeries] skipped symbol: insufficient price data", { symbol: entry.symbol, name: entry.name, rowCount: rows?.length ?? 0, source: "csv-cache" });
+      continue;
+    }
     const klines: Kline[] = rows.map((r) => ({
       date: r.date,
       open: r.open,
@@ -260,4 +279,91 @@ export function buildSymbolSeries(
 
   const benchmark = priceMap.get("000300") ?? [];
   return { series, benchmark };
+}
+
+/** Build SymbolSeries from pyserver's SQLite kline cache when CSV caches are unavailable. */
+export function buildSymbolSeriesFromPyserverCache(
+  entries: UniverseEntry[],
+  dbPath: string,
+): { series: SymbolSeries[]; benchmark: PriceRow[] } {
+  if (!fs.existsSync(dbPath)) return { series: [], benchmark: [] };
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const cachedKlines = db.prepare(
+      "SELECT payload, fetched_at FROM cache WHERE key LIKE ? ORDER BY fetched_at ASC",
+    );
+    const loadRows = (symbol: string): PriceRow[] => {
+      const rows = cachedKlines.all(`kline:${symbol}:%:qfq`) as Array<{
+        payload: string;
+        fetched_at: number;
+      }>;
+      if (rows.length === 0) return [];
+
+      const byDate = new Map<string, { row: PriceRow; fetchedAt: number }>();
+      for (const cacheRow of rows) {
+        let payload: Array<{
+          date: string;
+          open: number;
+          high: number;
+          low: number;
+          close: number;
+          volume: number;
+        }>;
+        try {
+          payload = JSON.parse(cacheRow.payload);
+        } catch (parseErr) {
+          console.warn("[dashboardData:pyserverCache] failed to parse cached payload", { symbol, fetchedAt: cacheRow.fetched_at, error: parseErr instanceof Error ? parseErr.message : String(parseErr) });
+          continue;
+        }
+        if (!Array.isArray(payload)) {
+          console.warn("[dashboardData:pyserverCache] cached payload is not an array", { symbol, fetchedAt: cacheRow.fetched_at });
+          continue;
+        }
+
+        for (const r of payload) {
+          if (!r.date) continue;
+          const existing = byDate.get(r.date);
+          if (existing && existing.fetchedAt > cacheRow.fetched_at) continue;
+          byDate.set(r.date, {
+            fetchedAt: cacheRow.fetched_at,
+            row: {
+              date: r.date,
+              open: r.open,
+              high: r.high,
+              low: r.low,
+              close: r.close,
+              volume: r.volume,
+              ticker: toDataSourceTicker(symbol),
+            },
+          });
+        }
+      }
+
+      return [...byDate.values()]
+        .map((item) => item.row)
+        .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    };
+
+    const series: SymbolSeries[] = [];
+    for (const entry of entries) {
+      const rows = loadRows(entry.symbol);
+      if (rows.length < 30) {
+        console.warn("[dashboardData:pyserverCache] skipped symbol: insufficient kline data", { symbol: entry.symbol, name: entry.name, rowCount: rows.length, source: "sqlite-cache" });
+        continue;
+      }
+      const klines: Kline[] = rows.map((r) => ({
+        date: r.date,
+        open: r.open,
+        high: r.high,
+        low: r.low,
+        close: r.close,
+        volume: r.volume,
+      }));
+      series.push({ entry, klines });
+    }
+    const benchmark = loadRows("sh000300");
+    return { series, benchmark: benchmark.length > 0 ? benchmark : loadRows("000300") };
+  } finally {
+    db.close();
+  }
 }

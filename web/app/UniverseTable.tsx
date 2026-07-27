@@ -9,20 +9,28 @@ interface Analyst {
   buy_ratio?: number | null;
   consensus_eps_next?: number | null;
   implied_target?: number | null;
+  target_price_source?: string | null;
+  target_price_method?: string | null;
+  target_price_confidence?: number | null;
+  target_horizon_days?: number | null;
   current_price?: number | null;
+  current_price_source?: string | null;
+  current_price_as_of?: string | null;
   upside_pct?: number | null;
 }
 
 interface Spot {
   symbol: string;
   price: number;
+  source?: string;
+  as_of?: string;
 }
 
 type Row = UniverseEntry & { analyst?: Analyst | null; loading?: boolean };
 
 const ANALYST_BATCH_SIZE = 1;
-const ANALYST_BATCH_CONCURRENCY = 8;
-const SPOT_BATCH_SIZE = 1000;
+const ANALYST_BATCH_CONCURRENCY = 2;
+const SPOT_BATCH_SIZE = 100;
 const EMPTY_SPOTS: Spot[] = [];
 
 function hasResearchValue(analyst: Analyst): boolean {
@@ -30,6 +38,7 @@ function hasResearchValue(analyst: Analyst): boolean {
     || analyst.total_count != null
     || analyst.consensus_eps_next != null
     || analyst.implied_target != null
+    || analyst.target_price_source != null
     || analyst.upside_pct != null;
 }
 
@@ -121,15 +130,23 @@ export default function UniverseTable({
   const [query, setQuery] = useState("");
   const [theme, setTheme] = useState("all");
   const [progress, setProgress] = useState(() => ({
+    spotAttempted: initialSpots.length,
     spotDone: initialSpots.length,
+    analystAttempted: 0,
     analystDone: 0,
     total: entries.length,
   }));
 
-  // Re-seed when entries prop changes (after refresh).
+  // Re-seed when entries prop changes.
   useEffect(() => {
     setRows(makeRows(entries, initialSpots));
-    setProgress({ spotDone: initialSpots.length, analystDone: 0, total: entries.length });
+    setProgress({
+      spotAttempted: initialSpots.length,
+      spotDone: initialSpots.length,
+      analystAttempted: 0,
+      analystDone: 0,
+      total: entries.length,
+    });
   }, [entries, initialSpots]);
 
   // Fetch analyst data in small batches so the table paints prices
@@ -143,7 +160,9 @@ export default function UniverseTable({
     }
 
     setProgress({
+      spotAttempted: 0,
       spotDone: 0,
+      analystAttempted: 0,
       analystDone: 0,
       total: symbols.length,
     });
@@ -155,7 +174,8 @@ export default function UniverseTable({
         if (cancelled) return;
         setProgress((prev) => ({
           ...prev,
-          spotDone: Math.min(symbols.length, prev.spotDone + batch.length),
+          spotAttempted: Math.min(symbols.length, prev.spotAttempted + batch.length),
+          spotDone: Math.min(symbols.length, prev.spotDone + spots.length),
         }));
         setRows((prev) => mergeSpots(prev, spots));
       }
@@ -174,11 +194,13 @@ export default function UniverseTable({
           if (!batch) return;
           const analysts = await fetchAnalystsFor(batch);
           if (cancelled) return;
+          const usefulAnalysts = analysts.filter(hasResearchValue);
           setProgress((prev) => ({
             ...prev,
-            analystDone: Math.min(symbols.length, prev.analystDone + batch.length),
+            analystAttempted: Math.min(symbols.length, prev.analystAttempted + batch.length),
+            analystDone: Math.min(symbols.length, prev.analystDone + usefulAnalysts.length),
           }));
-          setRows((prev) => mergeAnalysts(prev, analysts.filter(hasResearchValue), batch));
+          setRows((prev) => mergeAnalysts(prev, usefulAnalysts, batch));
         }
       }
       await Promise.all(
@@ -198,7 +220,7 @@ export default function UniverseTable({
       if (theme !== "all" && r.theme !== theme) return false;
       if (q && !`${r.symbol} ${r.name} ${r.theme} ${r.note ?? ""}`.toLowerCase().includes(q)) return false;
       if (onlyUpside) {
-        const u = r.analyst?.upside_pct;
+        const u = r.analyst?.target_price_source ? r.analyst?.upside_pct : null;
         if (u === undefined || u === null || u <= 0) return false;
       }
       return true;
@@ -206,12 +228,13 @@ export default function UniverseTable({
   }, [rows, onlyGlobal, onlyUpside, query, theme]);
 
   const priceCount = rows.filter((r) => r.analyst?.current_price != null).length;
-  const ratedCount = rows.filter((r) => r.analyst?.buy_count != null && r.analyst?.total_count).length;
-  const upsideCount = rows.filter((r) => (r.analyst?.upside_pct ?? 0) > 0).length;
+  const targetCount = rows.filter((r) => r.analyst?.implied_target != null && r.analyst?.target_price_source).length;
+  const upsideCount = rows.filter((r) => r.analyst?.target_price_source && (r.analyst?.upside_pct ?? 0) > 0).length;
   const progressTotal = Math.max(progress.total * 2, 1);
-  const progressDone = Math.min(progress.spotDone + progress.analystDone, progressTotal);
+  const progressDone = Math.min(progress.spotAttempted + progress.analystAttempted, progressTotal);
   const progressPct = Math.round((progressDone / progressTotal) * 100);
   const isFetching = progress.total > 0 && progressDone < progressTotal;
+  const hasDataGap = !isFetching && priceCount < rows.length;
   const themes = useMemo(() => [...new Set(entries.map((e) => e.theme))].sort(), [entries]);
   const grouped = filtered.reduce<Record<string, Row[]>>((acc, r) => {
     (acc[r.theme] ??= []).push(r);
@@ -245,19 +268,30 @@ export default function UniverseTable({
           <span>目标价高于现价</span>
         </label>
         <div className="toolbar-status">
-          显示 {filtered.length}/{rows.length} · 价格 {priceCount}/{rows.length} · 评级 {ratedCount} · 上行 {upsideCount}
+          显示 {filtered.length}/{rows.length} · 价格 {priceCount}/{rows.length} · 目标价 {targetCount} · 上行 {upsideCount}
         </div>
         <div className="fetch-progress" aria-label="pyserver 数据加载进度">
           <div className="fetch-progress-meta">
-            <span>{isFetching ? "正在从 pyserver 获取数据" : "pyserver 数据加载完成"}</span>
+            <span>
+              {isFetching
+                ? "正在从 pyserver 获取数据"
+                : hasDataGap
+                  ? "pyserver 请求完成，部分实时数据不可用"
+                  : "pyserver 数据加载完成"}
+            </span>
             <span>{progressPct}%</span>
           </div>
           <div className="fetch-progress-track">
             <div className="fetch-progress-bar" style={{ width: `${progressPct}%` }} />
           </div>
           <div className="fetch-progress-detail">
-            现价 {progress.spotDone}/{progress.total} · 目标价/评级 {progress.analystDone}/{progress.total}
+            现价可用 {priceCount}/{progress.total} · 规则目标价 {targetCount}/{progress.total}
           </div>
+          {hasDataGap && (
+            <div className="fetch-progress-warning">
+              实时价格或规则目标价接口暂不可用；股票池和 Dashboard 回测仍使用本地数据展示。
+            </div>
+          )}
         </div>
       </div>
 
@@ -276,31 +310,36 @@ export default function UniverseTable({
                     <th>名称</th>
                     <th>全球链</th>
                     <th className="num">现价</th>
-                    <th className="num">目标价</th>
+                    <th className="num" title="15-30 日 ATR/动量/前高规则测算目标">目标价</th>
                     <th className="num">上行</th>
-                    <th className="num">买入评级</th>
+                    <th className="num">目标置信度</th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((r) => {
-                    const u = r.analyst?.upside_pct;
+                    const hasTarget = r.analyst?.implied_target != null && Boolean(r.analyst?.target_price_source);
+                    const u = hasTarget ? r.analyst?.upside_pct : null;
                     return (
                       <tr key={r.symbol}>
                         <td className="mono">{r.symbol}</td>
                         <td>
                           <div className="stock-name">{r.name}</div>
-                          {r.note && <div className="stock-note">{r.note}</div>}
+                          {r.note && <div className="stock-note" title={r.note}>{r.note}</div>}
                         </td>
                         <td>{r.global_supply ? <span className="pill good">是</span> : <span className="pill">否</span>}</td>
-                        <td className="num">{r.analyst?.current_price?.toFixed(2) ?? (r.loading ? "…" : "无")}</td>
-                        <td className="num">{r.analyst?.implied_target?.toFixed(2) ?? (r.loading ? "…" : "无")}</td>
+                        <td className="num" title={r.analyst?.current_price_source ?? undefined}>
+                          {r.analyst?.current_price?.toFixed(2) ?? (r.loading ? "待加载" : "未覆盖")}
+                        </td>
+                        <td className="num" title={r.analyst?.target_price_method ?? r.analyst?.target_price_source ?? undefined}>
+                          {hasTarget ? r.analyst?.implied_target?.toFixed(2) : (r.loading ? "待加载" : "未覆盖")}
+                        </td>
                         <td className={`num ${u == null ? "muted" : u > 0 ? "pos" : "neg"}`}>
-                          {u == null ? (r.loading ? "…" : "无") : `${u > 0 ? "+" : ""}${u.toFixed(0)}%`}
+                          {u == null ? (r.loading ? "待加载" : "未覆盖") : `${u > 0 ? "+" : ""}${u.toFixed(0)}%`}
                         </td>
                         <td className="num muted">
-                          {r.analyst?.buy_count != null && r.analyst?.total_count
-                            ? `${r.analyst.buy_count}/${r.analyst.total_count}`
-                            : r.loading ? "…" : "无"}
+                          {r.analyst?.target_price_confidence != null
+                            ? `${(r.analyst.target_price_confidence * 100).toFixed(0)}%`
+                            : r.loading ? "待加载" : "未覆盖"}
                         </td>
                       </tr>
                     );

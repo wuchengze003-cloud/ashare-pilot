@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchAnalyst, fetchSpot } from "@/lib/pyserver";
+import { isAshareSymbol } from "@/lib/apiSecurity";
 
 export const runtime = "nodejs";
 
@@ -15,10 +16,12 @@ function timeout(ms: number): Promise<never> {
 export async function GET(req: NextRequest) {
   const symbol = req.nextUrl.searchParams.get("symbol");
   if (!symbol) return NextResponse.json({ error: "symbol required" }, { status: 400 });
+  if (!isAshareSymbol(symbol)) return NextResponse.json({ error: "invalid A-share symbol" }, { status: 400 });
   try {
     const data = await Promise.race([fetchAnalyst(symbol), timeout(ANALYST_TIMEOUT_MS)]);
     return NextResponse.json(data);
   } catch (e) {
+    console.error("[api/analyst] fetchAnalyst failed, attempting spot fallback", { symbol, error: e instanceof Error ? e.message : String(e) });
     try {
       const spot = await Promise.race([fetchSpot(symbol), timeout(SPOT_FALLBACK_TIMEOUT_MS)]);
       return NextResponse.json({
@@ -29,10 +32,11 @@ export async function GET(req: NextRequest) {
         buy_ratio: null,
         consensus_eps_next: null,
         implied_target: null,
+        target_price_source: null,
         upside_pct: null,
       });
-    } catch {
-      // Preserve the original analyst error; it is more useful for debugging.
+    } catch (spotErr) {
+      console.error("[api/analyst] spot fallback also failed", { symbol, error: spotErr instanceof Error ? spotErr.message : String(spotErr) });
     }
     return NextResponse.json(
       { error: e instanceof Error ? e.message : String(e) },

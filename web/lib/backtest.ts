@@ -1,19 +1,23 @@
-// Bar-by-bar backtest engine. Walks the price series forward, asks DeepSeek
-// for signals every `rebalanceEveryNDays` bars and applies them to a virtual
-// portfolio. Look-ahead rules: signals at rebalance date D see closes strictly
-// BEFORE D (you cannot compute a signal from a close and then trade at that
-// same close), and fundamentals are excluded entirely — we only have today's
-// snapshot, which would leak future valuations into historical decisions.
-//
-// Signals are cached by (model, messages) hash, so re-running the same
-// backtest is free in tokens — only adding new bars or symbols pays cost.
+// Bar-by-bar backtest engine. The default trading contract now mirrors the
+// intended live workflow: decide after day D close, execute on D+1 open, then
+// mark the portfolio at D+1 close. Signals never see D+1 prices.
 import type { Kline } from "./pyserver";
-import { scoreSymbols, type SymbolSnapshot, type Signal } from "./deepseek";
-import type { UniverseEntry } from "./universe";
+import type { SymbolSnapshot, Signal } from "./strategyTypes";
+import { ruleBasedScorer } from "./dashboardBacktest";
+import {
+  isStrategyEntryAsOf,
+  resolveEntryAsOf,
+  type UniverseEntry,
+} from "./universe";
 
 export interface BacktestConfig {
   startCash: number;
+  /** Backward-compatible alias. New callers should set decisionEveryNDays. */
   rebalanceEveryNDays: number;
+  /** How often to make a close-after-decision. Defaults to rebalanceEveryNDays, then 1. */
+  decisionEveryNDays?: number;
+  /** Current supported realistic execution model: D close decision -> D+1 open trade. */
+  executionPrice?: "next_open";
   startDate: string;         // YYYY-MM-DD
   endDate: string;
   feeBps: number;            // round-trip in basis points
@@ -30,6 +34,8 @@ export interface BacktestConfig {
    *  made for that symbol. Similarly, unselected positions below this weight
    *  are kept as residuals instead of sold. */
   rebalanceThresholdPct?: number;
+  sharpeTarget?: number;
+  optimizationWindow?: "post_cny_2026" | "jan_2026" | string;
 }
 
 export interface FundamentalSnapshot {
@@ -49,16 +55,28 @@ export interface PortfolioBar {
   positions: Record<string, { shares: number; price: number }>;
 }
 
+export type TradeSide = "buy" | "sell" | "reduce";
+
+export interface Trade {
+  /** Backward-compatible alias for tradeDate. */
+  date: string;
+  decisionDate: string;
+  tradeDate: string;
+  priceField: "open";
+  symbol: string;
+  side: TradeSide;
+  shares: number;
+  price: number;
+  reason: string;
+  targetWeightBefore: number;
+  targetWeightAfter: number;
+  pnlPct?: number | null;
+}
+
 export interface BacktestResult {
   config: BacktestConfig;
   equityCurve: PortfolioBar[];
-  trades: Array<{
-    date: string;
-    symbol: string;
-    side: "buy" | "sell";
-    shares: number;
-    price: number;
-  }>;
+  trades: Trade[];
   signalsByDate: Record<string, Signal[]>;
   stats: {
     totalReturnPct: number;
@@ -66,6 +84,8 @@ export interface BacktestResult {
     maxDrawdownPct: number;
     sharpe: number;
     trades: number;
+    winRatePct: number;
+    turnoverPct: number;
   };
 }
 
@@ -132,10 +152,23 @@ export type Scorer = (
   opts: { asOf: string; mode: "backtest" },
 ) => Promise<Signal[]>;
 
+const DEFAULT_SIGNAL_CONCURRENCY = 6;
+
+function signalConcurrency(): number {
+  const n = Number(process.env.BACKTEST_SIGNAL_CONCURRENCY ?? DEFAULT_SIGNAL_CONCURRENCY);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_SIGNAL_CONCURRENCY;
+}
+
 export interface RunBacktestOptions {
   onProgress?: (p: Progress) => void;
-  /** Override the LLM scorer — used by tests to inject deterministic signals. */
+  /** Override the default Dashboard rule scorer — used by tests to inject deterministic signals. */
   scorer?: Scorer;
+  /**
+   * Immutable signals that were already shown to the user for a decision date.
+   * Daily simulated portfolios must execute these archived plans instead of
+   * recomputing old signals with today's universe metadata or rule text.
+   */
+  historicalSignalsByDate?: Record<string, Signal[]>;
 }
 
 export async function runBacktest(
@@ -147,7 +180,19 @@ export async function runBacktest(
     ? { onProgress: optsOrOnProgress }
     : (optsOrOnProgress ?? {});
   const onProgress = opts.onProgress;
-  const scorer: Scorer = opts.scorer ?? scoreSymbols;
+  const scorer: Scorer = opts.scorer ?? ruleBasedScorer();
+  const historicalSignalsByDate = opts.historicalSignalsByDate ?? {};
+  const decisionEveryNDays = Math.max(
+    1,
+    Math.floor(cfg.decisionEveryNDays ?? cfg.rebalanceEveryNDays ?? 1),
+  );
+  const normalizedCfg: BacktestConfig = {
+    ...cfg,
+    rebalanceEveryNDays: decisionEveryNDays,
+    decisionEveryNDays,
+    executionPrice: "next_open",
+    sharpeTarget: cfg.sharpeTarget ?? 3,
+  };
   const dates = unionTradingDates(series).filter(
     (d) => d >= cfg.startDate && d <= cfg.endDate,
   );
@@ -183,58 +228,130 @@ export async function runBacktest(
   };
 
   const t0 = Date.now();
-  // Pre-fetch ALL rebalance signals in parallel. Signals at date D depend
-  // only on price history <= D, never on what we held — independent calls.
+  // Pre-fetch ALL decision signals in parallel. Signals at decision date D
+  // depend on closes <= D and execute at D+1 open.
   // Cached entries return instantly; uncached fire concurrently (bounded).
-  const rebalanceDates = dates.filter((_, i) => i % cfg.rebalanceEveryNDays === 0);
+  const decisionDates = dates.filter((_, i) => i < dates.length - 1 && i % decisionEveryNDays === 0);
   const signalsByDate: Record<string, Signal[]> = {};
-  const CONCURRENCY = 6;
+  const CONCURRENCY = signalConcurrency();
   let signalsDone = 0;
-  onProgress?.({ phase: "signals", done: 0, total: rebalanceDates.length });
-  for (let i = 0; i < rebalanceDates.length; i += CONCURRENCY) {
-    const slice = rebalanceDates.slice(i, i + CONCURRENCY);
+  onProgress?.({ phase: "signals", done: 0, total: decisionDates.length });
+  for (let i = 0; i < decisionDates.length; i += CONCURRENCY) {
+    const slice = decisionDates.slice(i, i + CONCURRENCY);
     const results = await Promise.all(
       slice.map(async (d) => {
+        const archivedSignals = historicalSignalsByDate[d];
+        if (archivedSignals) {
+          signalsDone++;
+          onProgress?.({ phase: "signals", done: signalsDone, total: decisionDates.length });
+          return [d, archivedSignals.map((s) => ({ ...s }))] as const;
+        }
         const snapshots: SymbolSnapshot[] = series
+          .filter((s) => isStrategyEntryAsOf(s.entry, d))
           .map((s) => {
-            // Strictly before d: the decision is made knowing yesterday's
-            // close, then executed at today's. Fundamentals are point-in-time:
+            const entry = resolveEntryAsOf(s.entry, d);
+            // Include D close: the decision is made after close, then executed
+            // on the next trading day's open. Fundamentals are point-in-time:
             // the latest snapshot whose effective_date <= d.
-            const upto = s.klines.filter((k) => k.date < d);
+            const upto = s.klines.filter((k) => k.date <= d);
             return {
-              symbol: s.entry.symbol,
-              name: s.entry.name,
-              theme: s.entry.theme,
+              symbol: entry.symbol,
+              name: entry.name,
+              theme: entry.theme,
+              note: entry.note,
               closes: upto.map((k) => k.close),
+              volumes: upto.map((k) => k.volume),
+              global_supply: entry.global_supply ?? null,
               fundamental: latestFundamentalAsOf(s.fundamentals, d),
             };
           })
           .filter((s) => s.closes.length > 0); // not yet listed as of d
         const sigs = await scorer(snapshots, { asOf: d, mode: "backtest" });
         signalsDone++;
-        onProgress?.({ phase: "signals", done: signalsDone, total: rebalanceDates.length });
+        onProgress?.({ phase: "signals", done: signalsDone, total: decisionDates.length });
         return [d, sigs] as const;
       }),
     );
     for (const [d, sigs] of results) signalsByDate[d] = sigs;
   }
   console.log(
-    `[backtest] fetched ${rebalanceDates.length} rebalance signals in ${
+    `[backtest] fetched ${decisionDates.length} decision signals in ${
       ((Date.now() - t0) / 1000).toFixed(1)
     }s (concurrency=${CONCURRENCY})`,
   );
 
   let cash = cfg.startCash;
   const shares: Record<string, number> = Object.fromEntries(symbols.map((s) => [s, 0]));
-  // Sells blocked by a 跌停 lock or 停牌; retried each bar until tradable.
-  const pendingSell: Record<string, boolean> = {};
+  const avgCost: Record<string, number> = Object.fromEntries(symbols.map((s) => [s, 0]));
+  // Sells/reductions blocked by a 跌停 lock or 停牌; retried each bar until tradable.
+  const pendingSell: Record<string, {
+    decisionDate: string;
+    side: "sell" | "reduce";
+    shares: number | "all";
+    reason: string;
+    hardExit: boolean;
+    targetWeightAfter: number;
+  } | undefined> = {};
   // Track the bar index at which a position was opened, for minHoldBars.
   const lastBuyBar: Record<string, number> = {};
   // Last traded close per symbol, for marking positions on days it has no bar.
   const lastPrice: Record<string, number> = {};
   const equityCurve: PortfolioBar[] = [];
-  const trades: BacktestResult["trades"] = [];
+  const trades: Trade[] = [];
   const fee = cfg.feeBps / 10_000;
+  let realizedTrades = 0;
+  let winningTrades = 0;
+  let tradedValue = 0;
+
+  const portfolioValue = (prices: Record<string, number>): number =>
+    cash +
+    symbols.reduce(
+      (sum, sym) => sum + (shares[sym] ?? 0) * (prices[sym] ?? lastPrice[sym] ?? 0),
+      0,
+    );
+
+  const isHardExit = (sig: Signal): boolean => sig.action === "sell";
+  const heldBars = (sym: string, i: number): number =>
+    lastBuyBar[sym] === undefined ? Number.POSITIVE_INFINITY : i - lastBuyBar[sym];
+  const canOrdinarySell = (sym: string, i: number): boolean =>
+    !normalizedCfg.minHoldBars || heldBars(sym, i) >= normalizedCfg.minHoldBars;
+
+  const recordSellWin = (sym: string, price: number) => {
+    if ((avgCost[sym] ?? 0) <= 0) return null;
+    const pnlPct = (price / avgCost[sym] - 1) * 100;
+    realizedTrades++;
+    if (pnlPct > 0) winningTrades++;
+    return pnlPct;
+  };
+
+  const pushTrade = (
+    date: string,
+    decisionDate: string,
+    sym: string,
+    side: TradeSide,
+    sh: number,
+    price: number,
+    reason: string,
+    targetWeightBefore: number,
+    targetWeightAfter: number,
+    pnlPct?: number | null,
+  ) => {
+    tradedValue += sh * price;
+    trades.push({
+      date,
+      decisionDate,
+      tradeDate: date,
+      priceField: "open",
+      symbol: sym,
+      side,
+      shares: sh,
+      price,
+      reason,
+      targetWeightBefore,
+      targetWeightAfter,
+      pnlPct,
+    });
+  };
 
   const progressEvery = Math.max(1, Math.floor(dates.length / 20));
   onProgress?.({ phase: "simulating", done: 0, total: dates.length });
@@ -243,174 +360,233 @@ export async function runBacktest(
     if (i % progressEvery === 0 || i === dates.length - 1) {
       onProgress?.({ phase: "simulating", done: i + 1, total: dates.length });
     }
-    // Symbols without a bar today (停牌, not yet listed) get no price entry
-    // and are untradable; held positions mark at their last traded close.
-    const prices: Record<string, number> = {};
+    // Symbols without a bar today (停牌, not yet listed) are untradable; held
+    // positions mark at their last traded close.
+    const tradePrices: Record<string, number> = {};
+    const closePrices: Record<string, number> = {};
     for (let j = 0; j < symbols.length; j++) {
       const k = byDate[j].get(date);
       if (k) {
-        prices[symbols[j]] = k.close;
-        lastPrice[symbols[j]] = k.close;
+        tradePrices[symbols[j]] = k.open;
+        closePrices[symbols[j]] = k.close;
       }
     }
 
-    const isRebalance = i % cfg.rebalanceEveryNDays === 0;
-    const signals = isRebalance ? signalsByDate[date] ?? [] : [];
+    const decisionDate = i > 0 && (i - 1) % decisionEveryNDays === 0 ? dates[i - 1] : null;
+    const signals = decisionDate ? signalsByDate[decisionDate] ?? [] : [];
+    const driftThreshold = (normalizedCfg.rebalanceThresholdPct ?? 0) / 100;
 
-    // A fresh buy decision supersedes a sell deferred from an earlier
-    // rebalance — otherwise the stale deferral force-dumps the position the
-    // newer signal just (re)built, paying fees both ways.
-    for (const sig of signals) {
-      if (sig.action === "buy" && pendingSell[sig.symbol]) {
-        pendingSell[sig.symbol] = false;
-      }
+    const rankedBuys = signals
+      .filter((s) => {
+        if (s.action !== "buy" || s.size <= 0) return false;
+        if (tradePrices[s.symbol] === undefined) return false;
+        const j = symbolIndex.get(s.symbol);
+        return !(j !== undefined && atLimitUp(j, date, tradePrices[s.symbol]));
+      })
+      .sort((a, b) => b.confidence * b.size - a.confidence * a.size);
+    const preliminaryBuys = rankedBuys.slice(0, normalizedCfg.maxPositions);
+    const preliminaryBuySymbols = new Set(preliminaryBuys.map((s) => s.symbol));
+    const lockedUnselectedCount = normalizedCfg.minHoldBars
+      ? symbols.filter(
+          (sym) =>
+            (shares[sym] ?? 0) > 0 &&
+            !preliminaryBuySymbols.has(sym) &&
+            !canOrdinarySell(sym, i),
+        ).length
+      : 0;
+    const topBuys = rankedBuys.slice(0, Math.max(0, normalizedCfg.maxPositions - lockedUnselectedCount));
+    const explicitTargetWeightSum = topBuys.reduce((sum, s) => sum + s.size, 0);
+    const hasExplicitTargetWeights =
+      explicitTargetWeightSum > 0 && explicitTargetWeightSum <= 1 + 1e-6;
+    const targetTotal = topBuys.reduce((sum, s) => sum + s.size * s.confidence, 0) || 1;
+    const targetWeights = new Map(
+      topBuys.map((s) => [
+        s.symbol,
+        hasExplicitTargetWeights ? s.size : (s.size * s.confidence) / targetTotal,
+      ] as const),
+    );
+    const hardSellSymbols = new Set(signals.filter(isHardExit).map((s) => s.symbol));
+
+    // A fresh selected buy cancels a stale deferred ordinary sell/reduction.
+    for (const sym of targetWeights.keys()) {
+      if (pendingSell[sym] && !hardSellSymbols.has(sym)) pendingSell[sym] = undefined;
     }
 
-    // Retry sells deferred by a prior 跌停/停牌 as soon as the name trades again.
-    for (const sym of symbols) {
-      if (!pendingSell[sym]) continue;
+    const executeSellOrder = (
+      sym: string,
+      requestedShares: number | "all",
+      side: "sell" | "reduce",
+      reason: string,
+      fromDecisionDate: string,
+      hardExit: boolean,
+      targetWeightAfter: number,
+      allowPending: boolean,
+    ) => {
       const held = shares[sym] ?? 0;
       if (held <= 0) {
-        pendingSell[sym] = false;
-        continue;
+        pendingSell[sym] = undefined;
+        return false;
       }
-      const j = symbolIndex.get(sym)!;
-      const px = prices[sym];
-      if (px === undefined) continue; // 停牌 — keep waiting
-      if (atLimitDown(j, date, px)) continue; // still 跌停 — keep waiting
-      if (cfg.minHoldBars && lastBuyBar[sym] !== undefined && i - lastBuyBar[sym] < cfg.minHoldBars) {
-        continue; // minimum holding period not met — keep waiting
+      if (!hardExit && !canOrdinarySell(sym, i)) return false;
+      const j = symbolIndex.get(sym);
+      const px = tradePrices[sym];
+      const enqueue = () => {
+        if (!allowPending) return;
+        pendingSell[sym] = {
+          decisionDate: fromDecisionDate,
+          side,
+          shares: requestedShares,
+          reason,
+          hardExit,
+          targetWeightAfter,
+        };
+      };
+      if (px === undefined) {
+        enqueue();
+        return false;
       }
-      cash += held * px * (1 - fee);
-      trades.push({ date, symbol: sym, side: "sell", shares: held, price: px });
-      shares[sym] = 0;
-      pendingSell[sym] = false;
+      if (j !== undefined && atLimitDown(j, date, px)) {
+        enqueue();
+        return false;
+      }
+      const beforeEquity = portfolioValue(tradePrices);
+      const targetWeightBefore = beforeEquity > 0 ? (held * px) / beforeEquity : 0;
+      const sh = requestedShares === "all" ? held : Math.min(held, requestedShares);
+      if (sh <= 0) return false;
+      cash += sh * px * (1 - fee);
+      const pnlPct = recordSellWin(sym, px);
+      shares[sym] = Math.max(0, held - sh);
+      if (shares[sym] === 0) avgCost[sym] = 0;
+      pushTrade(
+        date,
+        fromDecisionDate,
+        sym,
+        shares[sym] > 0 ? "reduce" : side,
+        sh,
+        px,
+        reason,
+        targetWeightBefore,
+        shares[sym] > 0 ? targetWeightAfter : 0,
+        pnlPct,
+      );
+      pendingSell[sym] = undefined;
+      return true;
+    };
+
+    // Retry deferred sells/reductions first; these are prior decisions waiting
+    // for the first tradable open.
+    for (const sym of symbols) {
+      const pending = pendingSell[sym];
+      if (!pending) continue;
+      executeSellOrder(
+        sym,
+        pending.shares,
+        pending.side,
+        pending.reason,
+        pending.decisionDate,
+        pending.hardExit,
+        pending.targetWeightAfter,
+        true,
+      );
     }
 
-    if (isRebalance) {
-      // Positions still inside their minimum holding period cannot be sold and
-      // therefore occupy slots that would otherwise go to new top-scoring names.
-      const lockedCount = cfg.minHoldBars
-        ? symbols.filter(
-            (sym) =>
-              (shares[sym] ?? 0) > 0 &&
-              lastBuyBar[sym] !== undefined &&
-              i - lastBuyBar[sym] < (cfg.minHoldBars ?? 0),
-          ).length
-        : 0;
-
-      // Portfolio value before any rebalance trades. Used for weight-drift checks.
-      const preEquity =
-        cash +
-        symbols.reduce(
-          (sum, sym) => sum + (shares[sym] ?? 0) * (prices[sym] ?? lastPrice[sym] ?? 0),
-          0,
-        );
-      const driftThreshold = (cfg.rebalanceThresholdPct ?? 0) / 100;
-
-      // Rank buys first so we know which names to keep when autoSellUnselected
-      // is enabled. This does not leak future info — signals themselves are
-      // built from closes strictly before today.
-      const rankedBuys = signals
-        .filter((s) => {
-          if (s.action !== "buy" || s.size <= 0) return false;
-          if (prices[s.symbol] === undefined) return false; // 停牌/未上市
-          const j = symbolIndex.get(s.symbol);
-          return !(j !== undefined && atLimitUp(j, date, prices[s.symbol]));
-        })
-        .sort((a, b) => b.confidence * b.size - a.confidence * a.size);
-      const topBuys = rankedBuys.slice(0, Math.max(0, cfg.maxPositions - lockedCount));
-      const buySymbols = new Set(topBuys.map((s) => s.symbol));
-
-      // Sells first to free cash
+    if (decisionDate) {
+      // Hard exits first: trend/risk sells bypass minHoldBars.
       for (const sig of signals) {
-        if (sig.action !== "sell") continue;
-        const held = shares[sig.symbol] ?? 0;
-        if (held <= 0) continue;
-        const j = symbolIndex.get(sig.symbol);
-        const px = prices[sig.symbol];
-        // 停牌 — no market today; defer like a 跌停 lock.
-        if (px === undefined) {
-          pendingSell[sig.symbol] = true;
-          continue;
-        }
-        // 跌停 — no buyers, can't sell today; defer and retry on later bars.
-        if (j !== undefined && atLimitDown(j, date, px)) {
-          pendingSell[sig.symbol] = true;
-          continue;
-        }
-        if (cfg.minHoldBars && lastBuyBar[sig.symbol] !== undefined && i - lastBuyBar[sig.symbol] < cfg.minHoldBars) {
-          continue; // minimum holding period not met
-        }
-        cash += held * px * (1 - fee);
-        trades.push({ date, symbol: sig.symbol, side: "sell", shares: held, price: px });
-        shares[sig.symbol] = 0;
-        pendingSell[sig.symbol] = false;
+        if (!isHardExit(sig)) continue;
+        executeSellOrder(
+          sig.symbol,
+          "all",
+          "sell",
+          sig.rationale || "硬退出",
+          decisionDate,
+          true,
+          0,
+          true,
+        );
       }
 
-      // Ranking-based strategies: liquidate any held name not in the top-K buy list.
-      if (cfg.autoSellUnselected) {
+      if (normalizedCfg.autoSellUnselected) {
         for (const sym of symbols) {
-          if (buySymbols.has(sym)) continue;
-          const held = shares[sym] ?? 0;
-          if (held <= 0) continue;
-          const j = symbolIndex.get(sym)!;
-          const px = prices[sym];
-          if (px === undefined) {
-            pendingSell[sym] = true;
+          if ((shares[sym] ?? 0) <= 0) continue;
+          if (targetWeights.has(sym) || hardSellSymbols.has(sym)) continue;
+          const px = tradePrices[sym] ?? lastPrice[sym];
+          const preEquity = portfolioValue(tradePrices);
+          if (px && driftThreshold > 0 && ((shares[sym] ?? 0) * px) / preEquity <= driftThreshold) {
             continue;
           }
-          if (atLimitDown(j, date, px)) {
-            pendingSell[sym] = true;
-            continue;
-          }
-          if (cfg.minHoldBars && lastBuyBar[sym] !== undefined && i - lastBuyBar[sym] < cfg.minHoldBars) {
-            continue; // minimum holding period not met
-          }
-          // Small residual positions below the drift threshold are kept to
-          // avoid churn from tiny rounding leftovers.
-          if (driftThreshold > 0 && (held * px) / preEquity <= driftThreshold) {
-            continue;
-          }
-          cash += held * px * (1 - fee);
-          trades.push({ date, symbol: sym, side: "sell", shares: held, price: px });
-          shares[sym] = 0;
-          pendingSell[sym] = false;
+          executeSellOrder(
+            sym,
+            "all",
+            "sell",
+            "跌出明日目标组合",
+            decisionDate,
+            false,
+            0,
+            true,
+          );
         }
       }
 
-      // Filter out top-K names whose current weight is already close to target.
-      const activeBuys = topBuys.filter((sig) => {
-        const px = prices[sig.symbol] ?? lastPrice[sig.symbol];
-        if (!px) return true;
-        const held = shares[sig.symbol] ?? 0;
-        if (held === 0) return true; // new position — always trade
-        if (driftThreshold <= 0) return true;
-        const totalWeight = topBuys.reduce((sum, s) => sum + s.size * s.confidence, 0) || 1;
-        const targetWeight = (sig.size * sig.confidence) / totalWeight;
-        const currentWeight = (held * px) / preEquity;
-        return Math.abs(targetWeight - currentWeight) > driftThreshold;
-      });
+      // Reduce selected names that are above target weight. This is ordinary
+      // rotation and respects minHoldBars.
+      for (const [sym, targetWeight] of targetWeights) {
+        const held = shares[sym] ?? 0;
+        const px = tradePrices[sym];
+        if (held <= 0 || !px) continue;
+        const preEquity = portfolioValue(tradePrices);
+        const currentWeight = preEquity > 0 ? (held * px) / preEquity : 0;
+        if (currentWeight <= targetWeight + driftThreshold) continue;
+        const excessValue = (currentWeight - targetWeight) * preEquity;
+        const sh = Math.floor(excessValue / px / 100) * 100;
+        executeSellOrder(
+          sym,
+          sh,
+          "reduce",
+          "高于目标仓位，减仓再平衡",
+          decisionDate,
+          false,
+          targetWeight,
+          true,
+        );
+      }
 
-      const activeWeight = activeBuys.reduce((sum, s) => sum + s.size * s.confidence, 0) || 1;
-      const budget = cash;
-      for (const sig of activeBuys) {
-        const weight = (sig.size * sig.confidence) / activeWeight;
-        const alloc = budget * weight;
-        const px = prices[sig.symbol];
-        if (!px || alloc <= 0) continue;
-        const sh = Math.floor(alloc / (px * (1 + fee)) / 100) * 100; // round to 100-lot
+      // Buy/increase selected names after sells have freed cash.
+      const postSellEquity = portfolioValue(tradePrices);
+      for (const sig of topBuys) {
+        const targetWeight = targetWeights.get(sig.symbol) ?? 0;
+        const px = tradePrices[sig.symbol];
+        if (!px) continue;
+        const j = symbolIndex.get(sig.symbol);
+        if (j !== undefined && atLimitUp(j, date, px)) continue;
+        const held = shares[sig.symbol] ?? 0;
+        const currentValue = held * px;
+        const currentWeight = postSellEquity > 0 ? currentValue / postSellEquity : 0;
+        if (currentWeight >= targetWeight - driftThreshold) continue;
+        const alloc = Math.max(0, targetWeight * postSellEquity - currentValue);
+        const sh = Math.floor(alloc / (px * (1 + fee)) / 100) * 100;
         if (sh <= 0) continue;
         const cost = sh * px * (1 + fee);
         if (cost > cash) continue;
         cash -= cost;
-        const isNewPosition = (shares[sig.symbol] ?? 0) === 0;
-        shares[sig.symbol] = (shares[sig.symbol] ?? 0) + sh;
-        if (isNewPosition) {
-          lastBuyBar[sig.symbol] = i;
-        }
-        trades.push({ date, symbol: sig.symbol, side: "buy", shares: sh, price: px });
-        pendingSell[sig.symbol] = false;
+        const oldShares = shares[sig.symbol] ?? 0;
+        const oldCost = (avgCost[sig.symbol] ?? 0) * oldShares;
+        shares[sig.symbol] = oldShares + sh;
+        avgCost[sig.symbol] = (oldCost + sh * px) / shares[sig.symbol];
+        if (oldShares === 0) lastBuyBar[sig.symbol] = i;
+        pushTrade(
+          date,
+          decisionDate,
+          sig.symbol,
+          "buy",
+          sh,
+          px,
+          sig.rationale || "进入明日目标组合",
+          currentWeight,
+          targetWeight,
+          null,
+        );
+        pendingSell[sig.symbol] = undefined;
       }
     }
 
@@ -419,12 +595,15 @@ export async function runBacktest(
     const positions: PortfolioBar["positions"] = {};
     for (const sym of symbols) {
       if (shares[sym] > 0) {
-        const px = prices[sym] ?? lastPrice[sym];
+        const px = closePrices[sym] ?? lastPrice[sym];
         equity += shares[sym] * px;
         positions[sym] = { shares: shares[sym], price: px };
       }
     }
     equityCurve.push({ date, equity, cash, positions });
+    for (const sym of symbols) {
+      if (closePrices[sym] !== undefined) lastPrice[sym] = closePrices[sym];
+    }
   }
 
   // Stats
@@ -454,9 +633,12 @@ export async function runBacktest(
     rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (rets.length || 1);
   const std = Math.sqrt(variance);
   const sharpe = std > 0 ? (mean / std) * Math.sqrt(252) : 0;
+  const averageEquity = equities.reduce((sum, e) => sum + e, 0) / (equities.length || 1);
+  const turnoverPct = averageEquity > 0 ? (tradedValue / averageEquity) * 100 : 0;
+  const winRatePct = realizedTrades > 0 ? (winningTrades / realizedTrades) * 100 : 0;
 
   return {
-    config: cfg,
+    config: normalizedCfg,
     equityCurve,
     trades,
     signalsByDate,
@@ -466,6 +648,8 @@ export async function runBacktest(
       maxDrawdownPct: maxDD * 100,
       sharpe,
       trades: trades.length,
+      winRatePct,
+      turnoverPct,
     },
   };
 }

@@ -20,6 +20,7 @@ function nullAnalyst(symbol: string): Analyst {
     buy_ratio: null,
     consensus_eps_next: null,
     implied_target: null,
+    target_price_source: null,
     current_price: null,
     upside_pct: null,
   };

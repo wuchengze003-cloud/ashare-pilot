@@ -14,6 +14,27 @@ export interface Kline {
   volume: number;
 }
 
+export type MinuteKlineFrequency = "1min" | "5min" | "15min" | "30min" | "60min";
+
+export interface MinuteKline {
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  amount: number;
+}
+
+export interface MinuteKlineSeries {
+  symbol: string;
+  ts_code: string;
+  freq: MinuteKlineFrequency;
+  source: "tushare_stk_mins";
+  realtime: false;
+  bars: MinuteKline[];
+}
+
 export interface Fundamental {
   symbol: string;
   name?: string | null;
@@ -36,8 +57,19 @@ async function get<T>(path: string, params: Record<string, string>): Promise<T> 
     const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
     try {
       const r = await fetch(`${BASE}${path}?${qs}`, { cache: "no-store", signal: ctrl.signal });
-      if (!r.ok) throw new Error(`pyserver ${path} ${r.status}: ${await r.text()}`);
+      if (!r.ok) {
+        const body = await r.text();
+        console.error("[pyserver] HTTP request failed", { path, status: r.status, params, body: body.slice(0, 200) });
+        throw new Error(`pyserver ${path} ${r.status}: ${body}`);
+      }
       return (await r.json()) as T;
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        console.error("[pyserver] request timed out", { path, params, timeoutMs: TIMEOUT_MS });
+      } else if (!(err instanceof Error && err.message.startsWith("pyserver "))) {
+        console.error("[pyserver] request error", { path, params, error: err instanceof Error ? err.message : String(err) });
+      }
+      throw err;
     } finally {
       clearTimeout(timer);
     }
@@ -57,6 +89,17 @@ export function fetchKlines(symbol: string, start = "20230101", end?: string) {
   return get<Kline[]>("/klines", params);
 }
 
+export function fetchMinuteKlines(
+  symbol: string,
+  start: string,
+  end?: string,
+  freq: MinuteKlineFrequency = "1min",
+) {
+  const params: Record<string, string> = { symbol, start, freq };
+  if (end) params.end = end;
+  return get<MinuteKlineSeries>("/minute-klines", params);
+}
+
 export function fetchFundamental(symbol: string) {
   return get<Fundamental>("/fundamental", { symbol });
 }
@@ -68,7 +111,13 @@ export interface Analyst {
   buy_ratio?: number | null;
   consensus_eps_next?: number | null;
   implied_target?: number | null;
+  target_price_source?: string | null;
+  target_price_method?: string | null;
+  target_price_confidence?: number | null;
+  target_horizon_days?: number | null;
   current_price?: number | null;
+  current_price_source?: string | null;
+  current_price_as_of?: string | null;
   upside_pct?: number | null;
 }
 
@@ -83,7 +132,7 @@ export function fetchAnalysts(symbols: string[]) {
 }
 
 export function fetchSpot(symbol: string) {
-  return get<{ symbol: string; name: string; price: number; change_pct: number }>(
+  return get<Spot>(
     "/spot",
     { symbol },
   );
@@ -96,6 +145,8 @@ export interface Spot {
   change_pct: number;
   volume?: number;
   turnover?: number;
+  source?: string;
+  as_of?: string;
 }
 
 export function fetchSpots(symbols: string[]) {

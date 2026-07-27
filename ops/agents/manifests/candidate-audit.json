@@ -1,0 +1,14 @@
+{
+  "id": "candidate-audit",
+  "agent": "claude",
+  "mode": "read_only",
+  "prompt": "Adversarially review the latest challenger manifest and experiment artifacts. Check look-ahead leakage, survivorship bias, short-window Sharpe inflation, transaction costs, limit and suspension assumptions, universe drift and model-selection leakage. Return APPROVE_FOR_SHADOW or REJECT; never promote a model and never edit files.",
+  "allowed_paths": [],
+  "forbidden_paths": ["web/data/universe.json", "web/data/runtime", "research/runtime/registry", "web/lib", "pyserver"],
+  "input_data_cutoff": "candidate_manifest_data_cutoff",
+  "expected_outputs": ["stdout APPROVE_FOR_SHADOW or REJECT", "stdout bias and cost audit"],
+  "required_verdict": "APPROVE_FOR_SHADOW",
+  "max_subagents": 0,
+  "timeout_seconds": 900,
+  "tests": []
+}

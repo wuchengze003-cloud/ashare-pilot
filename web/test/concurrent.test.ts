@@ -34,6 +34,13 @@ test("mapPool handles empty input", async () => {
   assert.deepEqual(out, []);
 });
 
+test("mapPool clamps a zero/negative/NaN limit to one worker", async () => {
+  for (const limit of [0, -3, Number.NaN]) {
+    const out = await mapPool([1, 2, 3], limit, async (n) => n * 2);
+    assert.deepEqual(out, [2, 4, 6], `limit=${limit} should still process every item`);
+  }
+});
+
 test("mapPool propagates errors", async () => {
   await assert.rejects(
     () => mapPool([1, 2, 3], 2, async (n) => {
