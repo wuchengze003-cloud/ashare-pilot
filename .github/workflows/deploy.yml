@@ -46,6 +46,22 @@ jobs:
             echo "[deploy] Cloning repo..."
             git clone --depth 1 --branch main "$REPO_URL" "$RELEASE_DIR"
 
+            echo "[deploy] Preserving runtime data from previous release..."
+            OLD_RUNTIME=""
+            if [ -d "$CURRENT/web/data/runtime" ]; then
+              OLD_RUNTIME="$CURRENT/web/data/runtime"
+            else
+              # Search all releases for runtime data
+              OLD_RUNTIME=$(find "$DEPLOY_ROOT/releases" -maxdepth 3 -path "*/web/data/runtime" -type d 2>/dev/null | head -1)
+            fi
+            if [ -n "$OLD_RUNTIME" ]; then
+              mkdir -p "$RELEASE_DIR/web/data/runtime"
+              cp -a "$OLD_RUNTIME/." "$RELEASE_DIR/web/data/runtime/"
+              echo "[deploy] Copied runtime data from $OLD_RUNTIME"
+            else
+              echo "[deploy] No previous runtime data found (first deploy)."
+            fi
+
             echo "[deploy] Building web..."
             cd "$RELEASE_DIR/web"
             test -r "$ENV_FILE" || { echo "[deploy] ERROR: $ENV_FILE not found"; exit 1; }
