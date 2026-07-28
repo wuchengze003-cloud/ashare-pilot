@@ -214,7 +214,7 @@ def backfill_outcomes(
     bars: Iterable[PriceBar],
     as_of_date: date,
     benchmark_symbol: str | None = None,
-    round_trip_fee_bps: float = 10,
+    round_trip_fee_bps: float = 16.0,  # from config/cost-model.json
 ) -> int:
     """Evaluate D-close predictions from D+1 open without future leakage."""
     by_symbol: dict[str, list[PriceBar]] = defaultdict(list)

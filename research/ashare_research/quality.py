@@ -27,6 +27,60 @@ class DataQualityResult:
     missing_feature_rates: dict[str, float]
     missing_feature_limits: dict[str, float]
     failures: tuple[str, ...]
+    moneyflow_status: str = "available"  # "available" | "unavailable" | "degenerate"
+    feature_status: dict[str, str] | None = None  # per-feature status map
+
+
+MONEYFLOW_FEATURES = {"net_moneyflow_ratio", "large_order_ratio"}
+
+
+def check_moneyflow_quality(
+    panel: pl.DataFrame,
+    feature_names: list[str],
+) -> tuple[str, list[str]]:
+    """Check whether moneyflow features are genuinely available.
+
+    Returns (status, failures) where status is one of:
+    - "available": data is present and non-degenerate
+    - "unavailable": columns are entirely null (data source missing)
+    - "degenerate": columns exist but are all-zero or near-zero-variance
+    """
+    mf_features = [f for f in feature_names if f in MONEYFLOW_FEATURES]
+    if not mf_features:
+        return "available", []
+
+    failures: list[str] = []
+    all_null = True
+    all_zero = True
+    for name in mf_features:
+        col = panel[name].cast(pl.Float64, strict=False) if name in panel.columns else None
+        if col is None:
+            failures.append(f"{name}: column missing from panel")
+            continue
+        non_null_count = int(col.is_not_null().sum())
+        if non_null_count > 0:
+            all_null = False
+        non_zero_count = int((col.cast(pl.Float64) != 0.0).fill_null(False).sum())
+        if non_zero_count > 0:
+            all_zero = False
+
+    if all_null:
+        return "unavailable", failures
+    if all_zero:
+        failures.append("moneyflow features are all zero — data source may be broken")
+        return "degenerate", failures
+
+    # Cross-sectional variance check: if std is near zero, data is suspect
+    for name in mf_features:
+        if name not in panel.columns:
+            continue
+        std_val = float(panel[name].cast(pl.Float64, strict=False).std(fill_null=0.0) or 0.0)
+        if std_val < 1e-12:
+            failures.append(f"{name}: near-zero cross-sectional variance")
+
+    if failures:
+        return "degenerate", failures
+    return "available", []
 
 
 def validate_feature_panel(
@@ -66,9 +120,27 @@ def validate_feature_panel(
         failures.append(f"duplicate date/symbol keys: {duplicate_keys}")
     if future_rows:
         failures.append(f"rows after decision date: {future_rows}")
+
+    # Moneyflow-specific quality check
+    mf_status, mf_failures = check_moneyflow_quality(panel, feature_names)
+    if mf_status == "degenerate":
+        failures.extend(mf_failures)
+
+    # Build per-feature status map
+    feature_status: dict[str, str] = {}
+    for name in feature_names:
+        if name in MONEYFLOW_FEATURES:
+            feature_status[name] = mf_status
+        else:
+            feature_status[name] = "available"
+
     excessive = [
         name for name, rate in missing.items() if rate > limits[name]
     ]
+    # When moneyflow is unavailable, don't flag its features as "excessive
+    # missing" — the absence is expected and already captured by mf_status.
+    if mf_status == "unavailable":
+        excessive = [n for n in excessive if n not in MONEYFLOW_FEATURES]
     if excessive:
         failures.append(f"features above missing threshold: {','.join(excessive)}")
     return DataQualityResult(
@@ -79,6 +151,8 @@ def validate_feature_panel(
         missing_feature_rates=missing,
         missing_feature_limits=limits,
         failures=tuple(failures),
+        moneyflow_status=mf_status,
+        feature_status=feature_status,
     )
 
 

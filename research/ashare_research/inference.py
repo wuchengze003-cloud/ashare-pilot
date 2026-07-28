@@ -64,6 +64,8 @@ def generate_shadow_snapshot(
             panel,
             ledger_path,
             model_version,
+            market_panel=panel,          # full panel for pricing (incl. exited stocks)
+            active_symbols=active,        # force-sell stocks that left the universe
         )
         close_prices = {
             _public_symbol(row["symbol"]): float(row["close"])

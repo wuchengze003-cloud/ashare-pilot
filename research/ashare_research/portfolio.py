@@ -25,7 +25,7 @@ class PredictionBar:
 class PortfolioConfig:
     start_cash: float = 1_000_000
     max_positions: int = 4
-    fee_bps: float = 10
+    fee_bps: float = 8.0  # per-side avg from config/cost-model.json (round_trip 16bps / 2)
     min_expected_return: float = 0.003
     switch_buffer: float = 0.002
     rebalance_threshold_pct: float = 5

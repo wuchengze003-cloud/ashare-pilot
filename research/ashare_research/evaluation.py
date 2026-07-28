@@ -147,7 +147,7 @@ def evaluate_oos_predictions(
         PortfolioConfig(
             start_cash=config.start_cash,
             max_positions=config.max_positions,
-            fee_bps=config.fee_bps * 2,
+            fee_bps=config.fee_bps * 2,  # stress test: double the per-side cost
             min_expected_return=config.min_expected_return,
             switch_buffer=config.switch_buffer,
             rebalance_threshold_pct=config.rebalance_threshold_pct,

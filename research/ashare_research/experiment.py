@@ -9,6 +9,7 @@ from pathlib import Path
 import polars as pl
 
 from .candidate import build_model_manifest, write_model_manifest
+from .cost_config import load_cost_model
 from .evaluation import evaluate_oos_predictions, write_evaluation_report
 from .features import build_feature_panel
 from .portfolio import PortfolioConfig
@@ -25,13 +26,16 @@ def run_challenger_experiment(
     runtime_root: Path | str,
     model_type: str = "lightgbm",
     optuna_trials: int = 20,
-    fee_bps: float = 10,
+    fee_bps: float | None = None,
     max_positions: int = 4,
     universe_path: Path | str | None = None,
 ) -> dict:
+    cost = load_cost_model()
+    if fee_bps is None:
+        fee_bps = cost.avg_side_bps  # 8.0 bps per side from unified model
     runtime = Path(runtime_root)
     panel_path = runtime / "features" / "panel.parquet"
-    feature_result = build_feature_panel(runtime / "data", panel_path, fee_bps * 2)
+    feature_result = build_feature_panel(runtime / "data", panel_path, cost.round_trip_bps)
     panel = pl.read_parquet(panel_path)
     features = list(feature_result.feature_names)
 

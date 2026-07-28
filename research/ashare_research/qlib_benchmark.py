@@ -30,7 +30,8 @@ class Alpha158BenchmarkResult:
     holdout_prediction_path: str
 
 
-def alpha158_next_open_label(horizon: int = 5, fee_bps: float = 10) -> str:
+def alpha158_next_open_label(horizon: int = 5, fee_bps: float = 16.0) -> str:
+    """Label with round-trip cost deduction. Default 16bps from config/cost-model.json."""
     if horizon < 1:
         raise ValueError("horizon must be positive")
     return f"Ref($close,-{horizon})/Ref($open,-1)-1-{fee_bps / 10_000:.8f}"

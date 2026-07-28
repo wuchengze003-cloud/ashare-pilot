@@ -23,6 +23,7 @@ class FeatureBuildResult:
     start_date: str
     end_date: str
     feature_names: tuple[str, ...]
+    moneyflow_available: bool = True
 
 
 def canonical_symbol(ts_code: str) -> str:
@@ -53,7 +54,7 @@ def _ensure_columns(frame: pl.LazyFrame, defaults: dict[str, float | None]) -> p
 def build_feature_panel(
     data_root: Path | str,
     output_path: Path | str,
-    round_trip_fee_bps: float = 10,
+    round_trip_fee_bps: float = 16.0,  # from config/cost-model.json (buy 5.5 + sell 10.5)
     as_of_date: str | None = None,
 ) -> FeatureBuildResult:
     data_root = Path(data_root)
@@ -83,8 +84,26 @@ def build_feature_panel(
         data_root / "raw" / "moneyflow",
         ["ts_code", "trade_date", "net_mf_amount", "buy_lg_amount", "sell_lg_amount"],
     )
+    moneyflow_available = False
     if moneyflow is not None:
         panel = panel.join(moneyflow, on=["ts_code", "trade_date"], how="left")
+        # Check if moneyflow data is actually present and non-trivial.
+        # A broken feed can produce all-null or all-zero columns, which
+        # would silently degenerate the moneyflow features to fake zeros.
+        mf_sample = panel.select(
+            pl.col("net_mf_amount").cast(pl.Float64, strict=False),
+        ).collect()
+        non_null = int(mf_sample["net_mf_amount"].is_not_null().sum())
+        non_zero = int((mf_sample["net_mf_amount"].cast(pl.Float64) != 0.0).fill_null(False).sum())
+        total_rows = max(mf_sample.height, 1)
+        coverage = non_null / total_rows
+        non_zero_rate = non_zero / max(non_null, 1)
+        if coverage > 0.5 and non_zero_rate > 0.01:
+            moneyflow_available = True
+        else:
+            # Data source exists but is degenerate — keep columns as null
+            # and mark as unavailable so downstream can skip the features.
+            pass
     limits = _scan_optional(
         data_root / "raw" / "stk_limit",
         ["ts_code", "trade_date", "up_limit", "down_limit"],
@@ -111,9 +130,9 @@ def build_feature_panel(
             "pe_ttm": None,
             "pb": None,
             "total_mv": None,
-            "net_mf_amount": 0.0,
-            "buy_lg_amount": 0.0,
-            "sell_lg_amount": 0.0,
+            "net_mf_amount": None,
+            "buy_lg_amount": None,
+            "sell_lg_amount": None,
             "is_suspended": False,
         },
     )
@@ -228,6 +247,7 @@ def build_feature_panel(
         for name, expression in definitions.items():
             expressions.append(expression.alias(name))
             feature_names.append(name)
+    # Non-moneyflow features (always computed)
     expressions.extend(
         [
             (pl.col("true_range").rolling_mean(14).over("symbol") / pl.col("adj_close")).alias(
@@ -236,10 +256,6 @@ def build_feature_panel(
             (
                 pl.col("turnover_rate") / pl.col("turnover_rate").rolling_mean(20).over("symbol")
             ).alias("turnover_ratio_20"),
-            (pl.col("net_mf_amount") / (pl.col("amount").abs() + 1)).alias("net_moneyflow_ratio"),
-            (
-                (pl.col("buy_lg_amount") - pl.col("sell_lg_amount")) / (pl.col("amount").abs() + 1)
-            ).alias("large_order_ratio"),
             pl.when(pl.col("pe_ttm").is_not_null() & (pl.col("pe_ttm") > 0))
             .then(pl.col("pe_ttm").log1p())
             .otherwise(None)
@@ -249,6 +265,29 @@ def build_feature_panel(
             pl.col("total_mv").log1p().alias("log_market_cap"),
         ]
     )
+    # Moneyflow features: only compute when data is available.
+    # When moneyflow is broken/unavailable, keep null so the model and
+    # quality checks can detect the absence via missing-rate rather than
+    # silently training on fake zeros.
+    if moneyflow_available:
+        expressions.extend(
+            [
+                (pl.col("net_mf_amount") / (pl.col("amount").abs() + 1)).alias(
+                    "net_moneyflow_ratio"
+                ),
+                (
+                    (pl.col("buy_lg_amount") - pl.col("sell_lg_amount"))
+                    / (pl.col("amount").abs() + 1)
+                ).alias("large_order_ratio"),
+            ]
+        )
+    else:
+        expressions.extend(
+            [
+                pl.lit(None).cast(pl.Float64).alias("net_moneyflow_ratio"),
+                pl.lit(None).cast(pl.Float64).alias("large_order_ratio"),
+            ]
+        )
     feature_names.extend(
         [
             "atr_14_pct",
@@ -384,6 +423,7 @@ def build_feature_panel(
         "start_date": str(dates.min()),
         "end_date": str(dates.max()),
         "as_of_date": as_of_date,
+        "moneyflow_available": moneyflow_available,
     }
     output_path.with_suffix(".manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", "utf-8"
@@ -395,4 +435,5 @@ def build_feature_panel(
         str(dates.min()),
         str(dates.max()),
         tuple(feature_names),
+        moneyflow_available,
     )
