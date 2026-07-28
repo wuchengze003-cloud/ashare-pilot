@@ -106,9 +106,13 @@ export async function optimizeBacktest(
   }
   if (!bestResult) throw new Error("optimizer failed to recover best result");
 
+  // Validation window: strictly January 2026 only (not Jan-to-end).
+  // This period is BEFORE the primary optimization window (post-CNY 2026-02-24)
+  // and must not overlap with it to serve as an independent check.
   const janConfig: BacktestConfig = {
     ...bestResult.config,
     startDate: "2026-01-02",
+    endDate: "2026-01-28",
     optimizationWindow: "jan_2026",
   };
   const janValidation = await runBacktest(series, janConfig, {

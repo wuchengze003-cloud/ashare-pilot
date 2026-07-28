@@ -2,6 +2,7 @@ import Link from "next/link";
 import { readRuntimeJson } from "@/lib/runtimeData";
 import { latestSignalDate, toExecutableSignals } from "@/lib/signalPolicy";
 import { activeEntriesAsOf, readUniverse } from "@/lib/universe";
+import { STRATEGIES } from "@/lib/strategyRegistry";
 
 export const dynamic = "force-dynamic";
 
@@ -198,8 +199,8 @@ export default function Home() {
       <div className="container">
         <header className="page-header">
           <div>
-            <div className="eyebrow">Dashboard 规则评分 · 本地运行数据</div>
-            <h1>硅基文明消费股交易系统</h1>
+            <div className="eyebrow">量化策略 · 多因子回测</div>
+            <h1>A股量化策略站</h1>
             <p>
               股票池已加载 {activeEntries.length} 只；当前尚未生成量化模拟仓和明日交易计划。
             </p>
@@ -227,9 +228,6 @@ export default function Home() {
     entries: activeEntries.filter((e) => e.theme === theme),
   }));
   const globalCount = activeEntries.filter((e) => e.global_supply).length;
-  const targetItems = analyst.items.filter((a) => a.implied_target != null && a.target_price_source);
-  const targetCount = targetItems.length;
-  const upsideCount = targetItems.filter((a) => (a.upside_pct ?? 0) > 0).length;
   const buys = signals.filter((s) => s.action === "buy").length;
   const sells = signals.filter((s) => s.action === "sell").length;
   const marketDate = backtest.equityCurve.at(-1)?.date ?? backtest.config.endDate;
@@ -255,8 +253,8 @@ export default function Home() {
     <div className="container">
       <header className="page-header">
         <div>
-          <div className="eyebrow">Dashboard 规则评分 · easy-tdx · Tushare/AkShare · 本地运行快照</div>
-          <h1>硅基文明消费股交易系统</h1>
+          <div className="eyebrow">量化策略 · 多因子回测 · 实时信号</div>
+          <h1>A股量化策略站</h1>
           <p>
             算力芯片、光模块、AI 服务器、液冷、电力、电力设备、功率器件、IDC、存储/HBM、
             半导体设备与材料、AI-PCB、晶圆代工、云/AI基建等供给侧标的。
@@ -274,29 +272,26 @@ export default function Home() {
       <div className="summary-grid">
         <Metric label="股票池" value={`${activeEntries.length}`} sub={`${themes.length} 个子主题`} />
         <Metric label="全球供应链" value={`${globalCount}`} sub={`${Math.round((globalCount / activeEntries.length) * 100)}% 覆盖`} />
-        <Metric label="目标价覆盖" value={`${targetCount}`} sub={`${upsideCount} 只高于现价`} />
+        <Metric label="策略数量" value={`${STRATEGIES.length}`} sub="同步运行观察" />
         <Metric label="明日计划" value={`${buys} 买 / ${sells} 卖`} sub={`信号日 ${signalDate ?? "未生成"}`} />
       </div>
 
       <section className="strategy-panel" aria-labelledby="strategy-title">
         <div className="strategy-panel-head">
           <div>
-            <div className="eyebrow">Strategy policy</div>
-            <h2 id="strategy-title">当前策略口径</h2>
+            <div className="eyebrow">Strategy Engine</div>
+            <h2 id="strategy-title">策略矩阵</h2>
           </div>
           <span className="pill good">每日收盘决策 · 次日开盘成交</span>
         </div>
         <div className="strategy-grid">
-          <div>
-            <span className="strategy-label">评分权重</span>
-            <strong>价格 35% · 主题 30% · 成交量 20% · 趋势 15%</strong>
-            <p>基本面只做风险过滤；明日买入只保留组合前 {signalSnapshot.max_positions ?? backtest.config.maxPositions} 只。</p>
-          </div>
-          <div>
-            <span className="strategy-label">买入形态</span>
-            <strong>突破确认 · 回踩转强 · 强主题内相对强势</strong>
-            <p>要求可由收盘价、均线、量能和主题标签验证。</p>
-          </div>
+          {STRATEGIES.map((s) => (
+            <div key={s.id}>
+              <span className="strategy-label">{s.name} <small style={{ opacity: 0.6 }}>{s.codename}</small></span>
+              <strong>{s.factors.join(" · ")}</strong>
+              <p>{s.description}</p>
+            </div>
+          ))}
           <div>
             <span className="strategy-label">风控约束</span>
             <strong>不追单日 &gt;5% · 不追 5 日 &gt;18%</strong>
@@ -307,7 +302,7 @@ export default function Home() {
 
       <section id="universe">
         <h2 className="subheading">股票池</h2>
-        <p className="muted">分主题排列，现价来自行情通道；目标价为 15-30 日 ATR/动量/前高规则测算目标，不再用 EPS×PE 推算。</p>
+        <p className="muted">分主题排列，现价来自行情通道。</p>
         <div className="theme-grid">
           {grouped.map(({ theme, entries }) => (
             <div key={theme} className="theme-panel">
@@ -323,16 +318,11 @@ export default function Home() {
                       <th>名称</th>
                       <th>全球链</th>
                       <th className="num">现价</th>
-                      <th className="num" title="15-30 日 ATR/动量/前高规则测算目标">目标价</th>
-                      <th className="num">上行</th>
-                      <th className="num">目标置信度</th>
                     </tr>
                   </thead>
                   <tbody>
                     {entries.map((entry) => {
                       const a = analystBySymbol.get(entry.symbol);
-                      const hasTarget = a?.implied_target != null && Boolean(a?.target_price_source);
-                      const upside = hasTarget ? a?.upside_pct : null;
                       return (
                         <tr key={entry.symbol}>
                           <td className="mono">{entry.symbol}</td>
@@ -342,15 +332,6 @@ export default function Home() {
                           </td>
                           <td>{entry.global_supply ? <span className="pill good">是</span> : <span className="pill">否</span>}</td>
                           <td className="num">{num(a?.current_price)}</td>
-                          <td className="num">{hasTarget ? num(a?.implied_target, 2) : "未覆盖"}</td>
-                          <td className={`num ${upside == null ? "muted" : upside > 0 ? "pos" : "neg"}`}>
-                            {pct(upside, 0, "未覆盖")}
-                          </td>
-                          <td className="num muted">
-                            {a?.target_price_confidence != null
-                              ? `${(a.target_price_confidence * 100).toFixed(0)}%`
-                              : "未覆盖"}
-                          </td>
                         </tr>
                       );
                     })}
@@ -420,7 +401,7 @@ export default function Home() {
           </div>
         ) : (
           <div className="warning-strip">
-            Sharpe 目标未达标：当前主窗口夏普 {backtest.stats.sharpe.toFixed(2)} / 目标 {sharpeTarget.toFixed(1)}；不要把它包装成已验证有效策略。
+            Sharpe 目标未达标：当前主窗口夏普 {backtest.stats.sharpe.toFixed(2)} / 目标 {sharpeTarget.toFixed(1)}。
           </div>
         )}
         {meetsSharpeTarget && (backtest.optimizationWarnings?.length ?? 0) > 0 && (

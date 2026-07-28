@@ -23,6 +23,7 @@ web/data/runtime/signals-history/*.json
 !web/data/runtime/**/.gitkeep
 /.claude/
 /.playwright-cli/
+/.qoder/
 /research/runtime/
 /research/mlruns/
 /research/Users/

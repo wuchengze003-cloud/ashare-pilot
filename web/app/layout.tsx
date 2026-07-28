@@ -7,10 +7,10 @@ const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3100";
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
-    default: "硅基文明消费股交易系统",
-    template: "%s · 硅基文明消费股交易系统",
+    default: "A股量化策略站",
+    template: "%s · A股量化策略站",
   },
-  description: "Dashboard 规则评分、行情通道、规则测算目标价、A 股主题股票池、实时信号与回测系统。",
+  description: "多因子量化策略矩阵，覆盖 AI 算力产业链。每日收盘决策、次日开盘执行，多策略同步观察。",
   icons: {
     icon: [
       { url: "/icon.svg", type: "image/svg+xml" },
@@ -21,23 +21,23 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "zh_CN",
-    siteName: "硅基文明消费股交易系统",
-    title: "硅基文明消费股交易系统",
-    description: "A 股硅基文明消费主题股票池、规则测算目标价、实时规则信号与策略回测。",
+    siteName: "A股量化策略站",
+    title: "A股量化策略站",
+    description: "多因子量化策略矩阵，覆盖 AI 算力产业链。每日收盘决策、次日开盘执行。",
     url: "/",
     images: [
       {
         url: "/social-card.png",
         width: 1200,
         height: 630,
-        alt: "硅基文明消费股交易系统社交分享卡片",
+        alt: "A股量化策略站",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "硅基文明消费股交易系统",
-    description: "A 股硅基文明消费主题股票池、规则测算目标价、实时规则信号与策略回测。",
+    title: "A股量化策略站",
+    description: "多因子量化策略矩阵，覆盖 AI 算力产业链。",
     images: ["/social-card.png"],
   },
 };
@@ -47,6 +47,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="zh-CN">
       <body>
         {children}
+        <footer className="site-footer">
+          <div className="container footer-inner">
+            <span>A股量化策略站 · 多因子回测 · 每日收盘决策</span>
+            <span className="muted">数据仅供参考，不构成投资建议</span>
+          </div>
+        </footer>
         <Analytics />
       </body>
     </html>

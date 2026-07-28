@@ -3,6 +3,7 @@ import { readRuntimeJson } from "@/lib/runtimeData";
 import { readSignalHistorySnapshots } from "@/lib/signalHistory";
 import { buildBuySignalHistoryRows } from "@/lib/buySignalHistory";
 import { loadEntries } from "@/lib/universe";
+import { STRATEGIES } from "@/lib/strategyRegistry";
 import { BuySignalHistoryTable } from "./BuySignalHistoryTable";
 import { EquityChart, ThemeChart } from "./Charts";
 import type { DashboardData } from "./types";
@@ -159,9 +160,30 @@ export default function DashboardPage() {
           <div className="eyebrow">Dashboard</div>
           <h1>策略 Dashboard</h1>
           <p>
-            基于项目股票池的可复现规则回测；当前生成脚本默认使用右侧价格-主题-量能规则。
-            数据来自本地行情侧车缓存，信号按当前运行快照生成。
+            {data?.strategy
+              ? `当前策略：${data.strategy.name} (${data.strategy.codename}) — ${data.strategy.description}`
+              : "基于项目股票池的可复现规则回测。数据来自本地行情侧车缓存，信号按当前运行快照生成。"}
           </p>
+          <div className="strategy-tabs" style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+            {STRATEGIES.map((s) => (
+              <span
+                key={s.id}
+                className={`strategy-tab${data?.strategy?.id === s.id ? " active" : ""}`}
+                style={{
+                  padding: "4px 12px",
+                  borderRadius: 6,
+                  fontSize: 13,
+                  border: "1px solid var(--border, #333)",
+                  background: data?.strategy?.id === s.id ? "var(--accent, #4f8cff)" : "transparent",
+                  color: data?.strategy?.id === s.id ? "#fff" : "var(--muted, #999)",
+                  cursor: "default",
+                }}
+                title={s.description}
+              >
+                {s.name} <small style={{ opacity: 0.7 }}>{s.codename}</small>
+              </span>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -186,6 +208,12 @@ export default function DashboardPage() {
             <Kpi label="交易次数" value={data.stats.trades.toString()} />
             <Kpi label="胜率" value={data.stats.winRatePct == null ? "暂无" : pct(data.stats.winRatePct)} pos={(data.stats.winRatePct ?? 0) >= 50} />
             <Kpi label="换手" value={data.stats.turnoverPct == null ? "暂无" : pct(data.stats.turnoverPct, 0)} />
+            {data.stats.roundTrips != null && (
+              <Kpi label="完整交易" value={`${data.stats.roundTrips} 笔`} />
+            )}
+            {data.stats.roundTripWinRatePct != null && (
+              <Kpi label="交易胜率" value={pct(data.stats.roundTripWinRatePct)} pos={data.stats.roundTripWinRatePct >= 50} />
+            )}
             <Kpi
               label="沪深300基准"
               value={benchmarkReturnPct == null ? "暂无数据" : pct(benchmarkReturnPct)}

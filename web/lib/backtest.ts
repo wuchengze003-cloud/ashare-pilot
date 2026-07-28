@@ -10,6 +10,17 @@ import {
   type UniverseEntry,
 } from "./universe";
 
+export interface CostConfig {
+  /** Commission on buy side, in basis points. Default 2.5bp. */
+  buyCommissionBps?: number;
+  /** Commission on sell side, in basis points. Default 2.5bp. */
+  sellCommissionBps?: number;
+  /** A-share stamp duty on sell side only, in basis points. Default 5bp (0.05%). */
+  stampDutyBps?: number;
+  /** Slippage per side, in basis points. Default 3bp. */
+  slippageBps?: number;
+}
+
 export interface BacktestConfig {
   startCash: number;
   /** Backward-compatible alias. New callers should set decisionEveryNDays. */
@@ -20,7 +31,11 @@ export interface BacktestConfig {
   executionPrice?: "next_open";
   startDate: string;         // YYYY-MM-DD
   endDate: string;
-  feeBps: number;            // round-trip in basis points
+  /** Legacy per-side fee in basis points. Applied on BOTH buy and sell.
+   *  When costConfig is provided, this field is ignored. */
+  feeBps: number;
+  /** Granular A-share cost model. Overrides feeBps when present. */
+  costConfig?: CostConfig;
   maxPositions: number;
   /** When true, any held position not selected by a buy signal at rebalance is sold.
    *  Useful for ranking-based strategies where the portfolio should exactly mirror
@@ -73,6 +88,17 @@ export interface Trade {
   pnlPct?: number | null;
 }
 
+export interface RoundTripEpisode {
+  symbol: string;
+  entryDate: string;
+  exitDate: string;
+  shares: number;
+  avgEntryPrice: number;
+  avgExitPrice: number;
+  pnlPct: number; // net of all fees
+  bars: number;
+}
+
 export interface BacktestResult {
   config: BacktestConfig;
   equityCurve: PortfolioBar[];
@@ -83,10 +109,19 @@ export interface BacktestResult {
     cagrPct: number;
     maxDrawdownPct: number;
     sharpe: number;
+    /** Total order count (buys + sells + reductions). */
     trades: number;
+    /** Legacy win rate (per sell action). Kept for backward compat. */
     winRatePct: number;
     turnoverPct: number;
+    /** Complete round-trip episodes (open → fully close). */
+    roundTrips?: number;
+    /** Profitable round-trip episodes / total round-trips. */
+    roundTripWinRatePct?: number;
+    /** Average P&L per round-trip episode, net of fees. */
+    avgRoundTripPnlPct?: number;
   };
+  episodes?: RoundTripEpisode[];
 }
 
 export interface SymbolSeries {
@@ -298,7 +333,15 @@ export async function runBacktest(
   const lastPrice: Record<string, number> = {};
   const equityCurve: PortfolioBar[] = [];
   const trades: Trade[] = [];
-  const fee = cfg.feeBps / 10_000;
+  // Cost model: granular A-share costs when costConfig is provided,
+  // otherwise fall back to legacy symmetric feeBps.
+  const cc = cfg.costConfig;
+  const buyFee = cc
+    ? ((cc.buyCommissionBps ?? 2.5) + (cc.slippageBps ?? 3)) / 10_000
+    : cfg.feeBps / 10_000;
+  const sellFee = cc
+    ? ((cc.sellCommissionBps ?? 2.5) + (cc.stampDutyBps ?? 5) + (cc.slippageBps ?? 3)) / 10_000
+    : cfg.feeBps / 10_000;
   let realizedTrades = 0;
   let winningTrades = 0;
   let tradedValue = 0;
@@ -453,7 +496,7 @@ export async function runBacktest(
       const targetWeightBefore = beforeEquity > 0 ? (held * px) / beforeEquity : 0;
       const sh = requestedShares === "all" ? held : Math.min(held, requestedShares);
       if (sh <= 0) return false;
-      cash += sh * px * (1 - fee);
+      cash += sh * px * (1 - sellFee);
       const pnlPct = recordSellWin(sym, px);
       shares[sym] = Math.max(0, held - sh);
       if (shares[sym] === 0) avgCost[sym] = 0;
@@ -564,9 +607,9 @@ export async function runBacktest(
         const currentWeight = postSellEquity > 0 ? currentValue / postSellEquity : 0;
         if (currentWeight >= targetWeight - driftThreshold) continue;
         const alloc = Math.max(0, targetWeight * postSellEquity - currentValue);
-        const sh = Math.floor(alloc / (px * (1 + fee)) / 100) * 100;
+        const sh = Math.floor(alloc / (px * (1 + buyFee)) / 100) * 100;
         if (sh <= 0) continue;
-        const cost = sh * px * (1 + fee);
+        const cost = sh * px * (1 + buyFee);
         if (cost > cash) continue;
         cash -= cost;
         const oldShares = shares[sig.symbol] ?? 0;
@@ -637,6 +680,15 @@ export async function runBacktest(
   const turnoverPct = averageEquity > 0 ? (tradedValue / averageEquity) * 100 : 0;
   const winRatePct = realizedTrades > 0 ? (winningTrades / realizedTrades) * 100 : 0;
 
+  // Round-trip episode computation: one episode = open position → fully close.
+  const episodes = computeRoundTripEpisodes(trades, buyFee, sellFee);
+  const roundTrips = episodes.length;
+  const roundTripWins = episodes.filter((ep) => ep.pnlPct > 0).length;
+  const roundTripWinRatePct = roundTrips > 0 ? (roundTripWins / roundTrips) * 100 : 0;
+  const avgRoundTripPnlPct = roundTrips > 0
+    ? episodes.reduce((sum, ep) => sum + ep.pnlPct, 0) / roundTrips
+    : 0;
+
   return {
     config: normalizedCfg,
     equityCurve,
@@ -650,6 +702,73 @@ export async function runBacktest(
       trades: trades.length,
       winRatePct,
       turnoverPct,
+      roundTrips,
+      roundTripWinRatePct,
+      avgRoundTripPnlPct,
     },
+    episodes,
   };
+}
+
+/** Reconstruct complete position episodes from the trade log.
+ *  An episode starts at the first buy and ends when the position is fully closed.
+ *  Partial reductions are accumulated into the episode's exit cash flows. */
+function computeRoundTripEpisodes(
+  trades: Trade[],
+  buyFee: number,
+  sellFee: number,
+): RoundTripEpisode[] {
+  const episodes: RoundTripEpisode[] = [];
+  // Open episodes keyed by symbol
+  const open = new Map<string, {
+    entryDate: string;
+    totalShares: number;
+    totalCost: number; // shares * price * (1 + buyFee)
+    exitShares: number;
+    exitProceeds: number; // shares * price * (1 - sellFee)
+    bars: number;
+  }>();
+
+  for (const t of trades) {
+    if (t.side === "buy") {
+      const existing = open.get(t.symbol);
+      if (existing) {
+        existing.totalShares += t.shares;
+        existing.totalCost += t.shares * t.price * (1 + buyFee);
+      } else {
+        open.set(t.symbol, {
+          entryDate: t.tradeDate,
+          totalShares: t.shares,
+          totalCost: t.shares * t.price * (1 + buyFee),
+          exitShares: 0,
+          exitProceeds: 0,
+          bars: 0,
+        });
+      }
+    } else {
+      // sell or reduce
+      const ep = open.get(t.symbol);
+      if (!ep) continue;
+      ep.exitShares += t.shares;
+      ep.exitProceeds += t.shares * t.price * (1 - sellFee);
+      ep.bars = Math.max(ep.bars, 0);
+      if (ep.exitShares >= ep.totalShares) {
+        // Position fully closed — record episode
+        const avgEntry = ep.totalCost / ep.totalShares;
+        const avgExit = ep.exitProceeds / ep.exitShares;
+        episodes.push({
+          symbol: t.symbol,
+          entryDate: ep.entryDate,
+          exitDate: t.tradeDate,
+          shares: ep.totalShares,
+          avgEntryPrice: avgEntry / (1 + buyFee), // raw price
+          avgExitPrice: avgExit / (1 - sellFee),   // raw price
+          pnlPct: (ep.exitProceeds / ep.totalCost - 1) * 100,
+          bars: ep.bars,
+        });
+        open.delete(t.symbol);
+      }
+    }
+  }
+  return episodes;
 }

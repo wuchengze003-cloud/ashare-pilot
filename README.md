@@ -1,8 +1,18 @@
-# 硅基文明消费股交易系统
+# A股量化策略站
 
-这是一个面向 A 股主题交易的本地/服务器量化应用，聚焦 AI 产业链上游“卖铲人”：算力芯片、光模块、高速互连、AI 服务器、液冷、电力、IDC、存储/HBM、半导体设备与材料、AI-PCB、晶圆代工、云与 AI 基建。
+多因子量化策略矩阵，聚焦 A 股 AI 产业链上游“卖铲人”：算力芯片、光模块、高速互连、AI 服务器、液冷、电力、IDC、存储/HBM、半导体设备与材料、AI-PCB、晶圆代工、云与 AI 基建。
 
-系统目标不是维护静态快照，而是每天收盘后生成可复现的量化模拟仓和明日交易计划。
+系统每天收盘后生成可复现的量化模拟仓和明日交易计划，支持多策略同步观察。
+
+## 策略矩阵
+
+| 策略 | 代号 | 核心因子 |
+|------|------|----------|
+| 右侧动量 | Momentum-V1 | 价格动量 35% + 主题强度 30% + 量能确认 20% + 趋势形态 15% |
+| 潮汐 | Tide | 资金流动量 + OBV 趋势 + 量价背离 + 吸筹检测 + 大单代理 |
+| 棱镜 | Prism | 市场状态检测 + 因子旋转 + 波动率目标 + Hurst 指数 + 市场宽度 |
+
+切换策略回测：`DASHBOARD_STRATEGY=tide npm run dashboard:update`
 
 当前正式交易策略仍为 V1 规则策略。`research/` 中的 ML 系统只运行候选模型和影子模型；
 模型未完成至少 60 个交易日、20 笔成交及全部样本外门槛前，不得替换 V1。
@@ -178,18 +188,14 @@ Web 服务暴露在 <http://localhost:3100>。pyserver 缓存和 Web runtime 快
 
 ## 服务器部署
 
-部署到子路径 `/a-share`：
+通过 GitHub Actions 自动部署（push main 触发），或手动：
 
 ```bash
 cd web
-DEPLOY_HOST=root@47.77.231.22 NEXT_BASE_PATH=/a-share npm run deploy:server
+DEPLOY_HOST=$DEPLOY_USER@$DEPLOY_HOST NEXT_BASE_PATH=/a-share npm run deploy:server
 ```
 
-服务器入口：
-
-- `http://47.77.231.22/a-share`
-- `http://47.77.231.22/a-share/dashboard`
-- `http://47.77.231.22/a-share/api/signals`
+服务器入口由 `DEPLOY_HOST` 环境变量控制，不在代码中硬编码。
 
 ## 开发命令
 
@@ -209,7 +215,8 @@ DEPLOY_HOST=root@47.77.231.22 NEXT_BASE_PATH=/a-share npm run deploy:server
 | Alpha158 冷启动基准 | `cd research && uv run ashare-research qlib-benchmark --model-type linear` |
 | 生产特征漂移检查 | `cd research && uv run ashare-research drift` |
 | 生成并登记挑战模型 | `cd research && uv run ashare-research run-challenger --model-type lightgbm --optuna-trials 20` |
-| 部署服务器 | `cd web && DEPLOY_HOST=root@服务器IP NEXT_BASE_PATH=/a-share npm run deploy:server` |
+| 部署服务器 | `cd web && DEPLOY_HOST=$USER@$HOST NEXT_BASE_PATH=/a-share npm run deploy:server` |
+| 切换策略回测 | `cd web && DASHBOARD_STRATEGY=tide npm run dashboard:update` |
 
 ## 安全与配置
 

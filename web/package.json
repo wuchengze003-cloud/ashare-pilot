@@ -10,6 +10,7 @@
     "test": "node --test --import tsx test/*.test.ts",
     "dashboard:build": "tsx scripts/build-dashboard.ts",
     "dashboard:update": "tsx scripts/update-quant-dashboard.ts",
+    "dashboard:compare": "tsx scripts/compare-strategies.ts",
     "dashboard:validate": "tsx scripts/validate-runtime-data.ts",
     "research:update": "tsx scripts/update-research-shadow.ts",
     "daily:close": "tsx scripts/daily-close.ts",

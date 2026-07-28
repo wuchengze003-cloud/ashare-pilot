@@ -1,7 +1,7 @@
 {
-  "$schema_note": "硅基文明消费股分层股票池。pool_tier标识当前正式/观察层；strategy_from/strategy_until控制点时策略生效区间；previous_theme保留历史分类。",
+  "$schema_note": "硅基文明消费股分层股票池。pool_tier标识当前正式/观察层；strategy_from/strategy_until控制点时策略生效区间；previous_theme保留历史分类。注意：strategy_from=2026-01-01表示原始论点股票（回测起点前已可识别为AI基建标的），2026-07-02及之后入池的股票为扩展研究后新增。本池存在一定幸存者偏差：仅包含至2026-07仍被认为有效的标的，历史中曾入池后被移除的标的通过strategy_until保留。",
   "updated_at": "2026-07-27",
-  "updated_by": "codex-point-in-time-curation",
+  "updated_by": "point-in-time-fix",
   "entries": [
     {
       "symbol": "688256",
@@ -9,7 +9,8 @@
       "theme": "算力/AI芯片",
       "note": "国产 AI 训练/推理芯片龙头",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688041",
@@ -17,7 +18,8 @@
       "theme": "算力/AI芯片",
       "note": "DCU + x86 CPU",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688047",
@@ -35,7 +37,8 @@
       "theme": "算力/AI芯片",
       "note": "国产 GPU",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002049",
@@ -53,7 +56,8 @@
       "theme": "算力/AI芯片",
       "note": "FPGA/MCU",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300308",
@@ -61,7 +65,8 @@
       "theme": "光模块",
       "note": "全球 800G/1.6T 龙头",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300502",
@@ -69,7 +74,8 @@
       "theme": "光模块",
       "note": "800G 第二梯队",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300394",
@@ -77,7 +83,8 @@
       "theme": "光模块",
       "note": "光器件，光模块板块联动",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "000988",
@@ -85,7 +92,8 @@
       "theme": "光模块",
       "note": "光模块/激光",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002281",
@@ -93,7 +101,8 @@
       "theme": "光模块",
       "note": "光器件+光模块",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "603083",
@@ -101,7 +110,8 @@
       "theme": "光模块",
       "note": "光模块新势力",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "301205",
@@ -109,7 +119,8 @@
       "theme": "光模块",
       "global_supply": true,
       "note": "高速光模块，布局800G/1.6T",
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300620",
@@ -117,7 +128,8 @@
       "theme": "光模块",
       "note": "铌酸锂调制器芯片及器件，薄膜铌酸锂光子集成",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "600330",
@@ -127,7 +139,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "半导体材料",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002222",
@@ -145,7 +158,8 @@
       "theme": "AI服务器",
       "note": "全球 AI 服务器/HPC 代工核心",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "000977",
@@ -153,7 +167,8 @@
       "theme": "AI服务器",
       "note": "国内最大 AI 服务器厂商",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "603019",
@@ -161,7 +176,8 @@
       "theme": "AI服务器",
       "global_supply": false,
       "note": "国产服务器与超算平台",
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "000938",
@@ -171,7 +187,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "AI服务器",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "301018",
@@ -179,7 +196,8 @@
       "theme": "液冷",
       "note": "数据中心精密温控",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300499",
@@ -187,7 +205,8 @@
       "theme": "液冷",
       "global_supply": false,
       "note": "数据中心液冷设备",
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300602",
@@ -205,7 +224,8 @@
       "theme": "电力",
       "note": "稳定基荷水电",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "003816",
@@ -213,7 +233,8 @@
       "theme": "电力",
       "note": "核电",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "600886",
@@ -221,7 +242,8 @@
       "theme": "电力",
       "global_supply": false,
       "note": "清洁电力，水火风光并济",
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "600011",
@@ -229,7 +251,8 @@
       "theme": "电力",
       "note": "火电+新能源",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300383",
@@ -237,7 +260,8 @@
       "theme": "IDC",
       "global_supply": false,
       "note": "IDC与云计算服务商",
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "603881",
@@ -245,7 +269,8 @@
       "theme": "IDC",
       "global_supply": false,
       "note": "批发型IDC，服务云厂商",
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300738",
@@ -253,7 +278,8 @@
       "theme": "IDC",
       "global_supply": false,
       "note": "自建IDC，面向智算需求",
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002335",
@@ -263,7 +289,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "电力设备",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "603290",
@@ -273,7 +300,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "功率器件",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688187",
@@ -283,7 +311,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "功率器件",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688711",
@@ -293,7 +322,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "功率器件",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "605111",
@@ -303,7 +333,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "功率器件",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "600460",
@@ -313,7 +344,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "功率器件",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688396",
@@ -323,7 +355,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "功率器件",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "600745",
@@ -333,7 +366,8 @@
       "global_supply": true,
       "pool_tier": "core",
       "previous_theme": "功率器件",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "603986",
@@ -341,7 +375,8 @@
       "theme": "存储/HBM",
       "note": "NAND/DRAM/MCU 龙头",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688825",
@@ -358,7 +393,8 @@
       "theme": "存储/HBM",
       "note": "DDR5/CXL 内存接口",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300223",
@@ -376,7 +412,8 @@
       "theme": "存储/HBM",
       "note": "存储模组",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002156",
@@ -386,7 +423,8 @@
       "global_supply": true,
       "pool_tier": "core",
       "previous_theme": "存储/HBM",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "600584",
@@ -396,7 +434,8 @@
       "global_supply": true,
       "pool_tier": "core",
       "previous_theme": "存储/HBM",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002185",
@@ -406,7 +445,8 @@
       "global_supply": true,
       "pool_tier": "core",
       "previous_theme": "存储/HBM",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002371",
@@ -414,7 +454,8 @@
       "theme": "半导体设备",
       "note": "刻蚀/沉积/清洗龙头",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688012",
@@ -422,7 +463,8 @@
       "theme": "半导体设备",
       "note": "刻蚀机",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688072",
@@ -430,7 +472,8 @@
       "theme": "半导体设备",
       "note": "薄膜沉积",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688126",
@@ -438,7 +481,8 @@
       "theme": "半导体材料",
       "note": "12 寸硅片",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300476",
@@ -446,7 +490,8 @@
       "theme": "AI-PCB",
       "note": "NVIDIA GB200 PCB 主力",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002463",
@@ -454,7 +499,8 @@
       "theme": "AI-PCB",
       "note": "AI 服务器主板",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002916",
@@ -462,7 +508,8 @@
       "theme": "AI-PCB",
       "note": "PCB 龙头",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002938",
@@ -470,7 +517,8 @@
       "theme": "AI-PCB",
       "note": "苹果链 + AI 服务器",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "600183",
@@ -478,7 +526,8 @@
       "theme": "AI-PCB",
       "note": "高速覆铜板 (CCL)",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002436",
@@ -486,7 +535,8 @@
       "theme": "AI-PCB",
       "global_supply": false,
       "note": "PCB与IC载板国产化",
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688261",
@@ -496,7 +546,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "功率器件",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688019",
@@ -504,7 +555,8 @@
       "theme": "半导体材料",
       "note": "CMP抛光液龙头",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002409",
@@ -512,7 +564,8 @@
       "theme": "半导体材料",
       "note": "前驱体/SOD材料平台",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688981",
@@ -520,7 +573,8 @@
       "theme": "晶圆代工",
       "note": "大陆晶圆代工龙头",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "600941",
@@ -528,7 +582,8 @@
       "theme": "云/AI基建",
       "note": "国内最大运营商，移动云和AI基础设施服务",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "601728",
@@ -536,7 +591,8 @@
       "theme": "云/AI基建",
       "note": "天翼云稳居国内前三，支撑AI算力调度",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688082",
@@ -544,7 +600,8 @@
       "theme": "半导体设备",
       "note": "清洗设备龙头，TSV电镀设备用于先进封装",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300346",
@@ -552,7 +609,8 @@
       "theme": "半导体材料",
       "note": "国内光刻胶领先，高纯电子特气用于先进制程",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "000021",
@@ -562,7 +620,8 @@
       "global_supply": true,
       "pool_tier": "core",
       "previous_theme": "存储/HBM",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002475",
@@ -572,7 +631,8 @@
       "global_supply": true,
       "pool_tier": "core",
       "previous_theme": "AI服务器",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688498",
@@ -580,7 +640,8 @@
       "theme": "光模块",
       "note": "光芯片龙头，为AI光模块提供激光器芯片",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688120",
@@ -588,7 +649,8 @@
       "theme": "半导体设备",
       "note": "CMP设备龙头，用于AI芯片先进制程和封装",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688037",
@@ -596,7 +658,8 @@
       "theme": "半导体设备",
       "note": "涂胶显影设备龙头，用于前道晶圆制造",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "600050",
@@ -604,7 +667,8 @@
       "theme": "云/AI基建",
       "note": "三大运营商之一，提供AI算力网络和云服务",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688347",
@@ -612,7 +676,8 @@
       "theme": "晶圆代工",
       "note": "特色工艺晶圆代工",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688268",
@@ -620,7 +685,8 @@
       "theme": "半导体材料",
       "note": "高纯特种气体龙头，供应台积电等全球先进制程",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688234",
@@ -628,7 +694,8 @@
       "theme": "半导体材料",
       "note": "碳化硅衬底龙头，AI服务器功率器件关键材料",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300655",
@@ -636,7 +703,8 @@
       "theme": "半导体材料",
       "note": "高纯化学试剂和光刻胶，用于AI芯片制造",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002837",
@@ -644,7 +712,8 @@
       "theme": "液冷",
       "note": "数据中心温控与液冷",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "601985",
@@ -652,7 +721,8 @@
       "theme": "电力",
       "note": "核电运营，稳定清洁电力",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688676",
@@ -662,7 +732,8 @@
       "global_supply": true,
       "pool_tier": "core",
       "previous_theme": "电力设备",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300693",
@@ -672,7 +743,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "电力设备",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002364",
@@ -682,7 +754,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "电力设备",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002851",
@@ -692,7 +765,8 @@
       "global_supply": true,
       "pool_tier": "core",
       "previous_theme": "电力设备",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300491",
@@ -714,7 +788,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "功率器件",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002138",
@@ -724,7 +799,8 @@
       "global_supply": true,
       "pool_tier": "core",
       "previous_theme": "功率器件",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "603678",
@@ -744,7 +820,8 @@
       "theme": "存储/HBM",
       "note": "SK海力士存储代理",
       "global_supply": true,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "603228",
@@ -752,7 +829,8 @@
       "theme": "AI-PCB",
       "note": "高端PCB配套AI服务器",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "688205",
@@ -760,7 +838,8 @@
       "theme": "光模块",
       "note": "光模块与光放大器",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "000063",
@@ -770,7 +849,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "AI服务器",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "600905",
@@ -778,7 +858,8 @@
       "theme": "电力",
       "note": "绿电龙头，为AI数据中心提供清洁能源",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "002518",
@@ -788,7 +869,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "电力设备",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "600089",
@@ -798,7 +880,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "电力设备",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300408",
@@ -808,7 +891,8 @@
       "global_supply": false,
       "pool_tier": "core",
       "previous_theme": "功率器件",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "600667",
@@ -818,7 +902,8 @@
       "global_supply": true,
       "pool_tier": "core",
       "previous_theme": "存储/HBM",
-      "theme_effective_from": "2026-07-02"
+      "theme_effective_from": "2026-07-02",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "300249",
@@ -826,7 +911,8 @@
       "theme": "液冷",
       "note": "数据中心精密温控龙头，提供液冷解决方案",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "600845",
@@ -834,7 +920,8 @@
       "theme": "IDC",
       "note": "宝之云IDC龙头，提供AI算力基础设施",
       "global_supply": false,
-      "pool_tier": "core"
+      "pool_tier": "core",
+      "strategy_from": "2026-01-01"
     },
     {
       "symbol": "301511",

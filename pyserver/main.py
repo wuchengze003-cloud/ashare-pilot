@@ -1512,3 +1512,215 @@ def spots(symbols: str = Query(..., description="comma-separated symbols")):
 
     by_symbol = {str(row.get("symbol")): row for row in out}
     return [by_symbol[symbol] for symbol in uniq if symbol in by_symbol]
+
+
+# ---------- moneyflow (资金流向) endpoint ------------------------------------
+
+class MoneyflowRow(BaseModel):
+    trade_date: str
+    buy_lg_amount: float | None = None   # 大单买入(万)
+    sell_lg_amount: float | None = None  # 大单卖出(万)
+    buy_elg_amount: float | None = None  # 特大单买入(万)
+    sell_elg_amount: float | None = None # 特大单卖出(万)
+    net_mf_amount: float | None = None   # 净流入(万)
+
+
+class MoneyflowResponse(BaseModel):
+    symbol: str
+    rows: list[MoneyflowRow]
+
+
+_MONEYFLOW_LIMITER = _TokenBucket(n=15, window_s=60)
+
+
+@app.get("/moneyflow", response_model=MoneyflowResponse)
+def moneyflow(
+    symbol: str = Query(..., description="e.g. sz000001 or sh600519"),
+    days: int = Query(20, ge=1, le=60, description="lookback trading days"),
+):
+    """Individual stock money-flow (资金流向) from Tushare moneyflow API.
+
+    Requires Tushare 5000+ points. Returns large/extra-large order flow
+    for the Tide strategy's capital-flow signals.
+    """
+    ts_code, _market = _to_ts_code(symbol)
+    cache_key = f"moneyflow:{ts_code}:{days}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    end = date.today().strftime("%Y%m%d")
+    start = (date.today() - timedelta(days=days * 2 + 10)).strftime("%Y%m%d")
+    _MONEYFLOW_LIMITER.acquire()
+    try:
+        df = _with_retries(
+            _pro.moneyflow,
+            ts_code=ts_code,
+            start_date=start,
+            end_date=end,
+        )
+    except Exception as e:
+        logger.warning("moneyflow failed symbol=%s: %s", symbol, e)
+        raise HTTPException(status_code=502, detail=f"moneyflow upstream error: {e}")
+
+    if df is None or df.empty:
+        return MoneyflowResponse(symbol=symbol, rows=[])
+
+    df = df.sort_values("trade_date").tail(days)
+    rows = [
+        MoneyflowRow(
+            trade_date=str(r["trade_date"]),
+            buy_lg_amount=_safe_float(r.get("buy_lg_amount")),
+            sell_lg_amount=_safe_float(r.get("sell_lg_amount")),
+            buy_elg_amount=_safe_float(r.get("buy_elg_amount")),
+            sell_elg_amount=_safe_float(r.get("sell_elg_amount")),
+            net_mf_amount=_safe_float(r.get("net_mf_amount")),
+        )
+        for _, r in df.iterrows()
+    ]
+    result = MoneyflowResponse(symbol=symbol, rows=rows)
+    cache_put(cache_key, result.model_dump(), 3600)
+    return result
+
+
+def _safe_float(v: Any) -> float | None:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+# ---------- top_list (龙虎榜) endpoint ----------------------------------------
+
+class TopListRow(BaseModel):
+    trade_date: str
+    reason: str | None = None          # 上榜原因
+    buy: float | None = None           # 买入额(万)
+    sell: float | None = None          # 卖出额(万)
+    net_buy: float | None = None       # 净买入(万)
+
+
+class TopListResponse(BaseModel):
+    symbol: str
+    rows: list[TopListRow]
+
+
+_TOPLIST_LIMITER = _TokenBucket(n=15, window_s=60)
+
+
+@app.get("/top-list", response_model=TopListResponse)
+def top_list(
+    symbol: str = Query(..., description="e.g. sz000001 or sh600519"),
+    days: int = Query(30, ge=1, le=90, description="lookback calendar days"),
+):
+    """Dragon-Tiger list (龙虎榜) from Tushare top_list API.
+
+    Shows institutional/brokerage block trades. Useful for detecting
+    smart-money activity in the Tide strategy.
+    """
+    ts_code, _market = _to_ts_code(symbol)
+    cache_key = f"toplist:{ts_code}:{days}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    end = date.today().strftime("%Y%m%d")
+    start = (date.today() - timedelta(days=days)).strftime("%Y%m%d")
+    _TOPLIST_LIMITER.acquire()
+    try:
+        df = _with_retries(
+            _pro.top_list,
+            ts_code=ts_code,
+            start_date=start,
+            end_date=end,
+        )
+    except Exception as e:
+        logger.warning("top_list failed symbol=%s: %s", symbol, e)
+        raise HTTPException(status_code=502, detail=f"top_list upstream error: {e}")
+
+    if df is None or df.empty:
+        return TopListResponse(symbol=symbol, rows=[])
+
+    df = df.sort_values("trade_date").tail(days)
+    rows = [
+        TopListRow(
+            trade_date=str(r["trade_date"]),
+            reason=str(r.get("reason", "")) or None,
+            buy=_safe_float(r.get("buy")),
+            sell=_safe_float(r.get("sell")),
+            net_buy=_safe_float(r.get("net_buy")),
+        )
+        for _, r in df.iterrows()
+    ]
+    result = TopListResponse(symbol=symbol, rows=rows)
+    cache_put(cache_key, result.model_dump(), 3600)
+    return result
+
+
+# ---------- margin_detail (融资融券) endpoint ----------------------------------
+
+class MarginRow(BaseModel):
+    trade_date: str
+    rzye: float | None = None          # 融资余额(元)
+    rqye: float | None = None          # 融券余额(元)
+    rzmre: float | None = None         # 融资买入额(元)
+    rqchl: float | None = None         # 融券偿还量(股)
+
+
+class MarginResponse(BaseModel):
+    symbol: str
+    rows: list[MarginRow]
+
+
+_MARGIN_LIMITER = _TokenBucket(n=15, window_s=60)
+
+
+@app.get("/margin-detail", response_model=MarginResponse)
+def margin_detail(
+    symbol: str = Query(..., description="e.g. sz000001 or sh600519"),
+    days: int = Query(20, ge=1, le=60, description="lookback trading days"),
+):
+    """Margin trading detail (融资融券) from Tushare margin_detail API.
+
+    Rising margin balance (融资余额) indicates leveraged bullish sentiment.
+    Useful as a confirmation signal for the Tide strategy.
+    """
+    ts_code, _market = _to_ts_code(symbol)
+    cache_key = f"margin:{ts_code}:{days}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    end = date.today().strftime("%Y%m%d")
+    start = (date.today() - timedelta(days=days * 2 + 10)).strftime("%Y%m%d")
+    _MARGIN_LIMITER.acquire()
+    try:
+        df = _with_retries(
+            _pro.margin_detail,
+            ts_code=ts_code,
+            start_date=start,
+            end_date=end,
+        )
+    except Exception as e:
+        logger.warning("margin_detail failed symbol=%s: %s", symbol, e)
+        raise HTTPException(status_code=502, detail=f"margin_detail upstream error: {e}")
+
+    if df is None or df.empty:
+        return MarginResponse(symbol=symbol, rows=[])
+
+    df = df.sort_values("trade_date").tail(days)
+    rows = [
+        MarginRow(
+            trade_date=str(r["trade_date"]),
+            rzye=_safe_float(r.get("rzye")),
+            rqye=_safe_float(r.get("rqye")),
+            rzmre=_safe_float(r.get("rzmre")),
+            rqchl=_safe_float(r.get("rqchl")),
+        )
+        for _, r in df.iterrows()
+    ]
+    result = MarginResponse(symbol=symbol, rows=rows)
+    cache_put(cache_key, result.model_dump(), 3600)
+    return result

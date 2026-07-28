@@ -22,6 +22,7 @@ import {
 import { runBacktest, type BacktestConfig, type BacktestResult } from "../lib/backtest";
 import { ruleBasedScorer } from "../lib/dashboardBacktest";
 import { optimizeBacktest, type OptimizationResult } from "../lib/backtestOptimization";
+import { getStrategy, getDefaultStrategy, STRATEGIES } from "../lib/strategyRegistry";
 import { buildLatestPlan, buildPromotedModelPlan, type LatestPlan } from "../lib/latestPlan";
 import { modelSnapshotForDate } from "../lib/mlShadow";
 import { readRuntimeJson, writeRuntimeJson } from "../lib/runtimeData";
@@ -85,6 +86,8 @@ const minHoldBars = Number(process.env.DASHBOARD_MIN_HOLD_BARS ?? 5);
 const rebalanceThresholdPct = Number(process.env.DASHBOARD_REBALANCE_THRESHOLD_PCT ?? 5);
 const minScoreToBuy = Number(process.env.DASHBOARD_MIN_SCORE_TO_BUY ?? 0.54);
 const shouldOptimize = process.env.DASHBOARD_OPTIMIZE === "1";
+const strategyId = process.env.DASHBOARD_STRATEGY ?? "momentum-v1";
+const activeStrategy = getStrategy(strategyId) ?? getDefaultStrategy();
 const cacheDir = path.resolve(process.cwd(), process.env.DASHBOARD_CACHE ?? ".cache/datasource");
 const pyserverCacheDb = path.resolve(process.cwd(), process.env.PYSERVER_CACHE_DB ?? "../pyserver/cache.db");
 
@@ -92,6 +95,7 @@ interface DashboardOutput {
   generated_at: string;
   snapshot_basis?: "latest-complete-close" | "intraday-midday";
   snapshot_label?: string;
+  strategy?: { id: string; name: string; codename: string; description: string };
   config: BacktestConfig;
   stats: BacktestResult["stats"];
   equityCurve: BacktestResult["equityCurve"];
@@ -210,6 +214,7 @@ function computeThemePerformance(
 async function main() {
   const universe = loadStrategyEntries();
   console.log(`Loaded ${universe.length} universe entries`);
+  console.log(`Strategy: ${activeStrategy.name} (${activeStrategy.codename}) [${activeStrategy.id}]`);
 
   const source = fs.existsSync(cacheDir)
     ? `data-source CSVs at ${cacheDir}`
@@ -241,6 +246,12 @@ async function main() {
     startDate,
     endDate,
     feeBps: 10,
+    costConfig: {
+      buyCommissionBps: 2.5,
+      sellCommissionBps: 2.5,
+      stampDutyBps: 5,
+      slippageBps: 3,
+    },
     maxPositions,
     autoSellUnselected: true,
     minHoldBars,
@@ -253,9 +264,10 @@ async function main() {
       .filter((snapshot) => snapshot.signal_date < endDate)
       .map((snapshot) => [snapshot.signal_date, snapshot.signals]),
   );
+  const activeScorer = activeStrategy.createScorer({ minScoreToBuy });
   const runOptions = {
-    scorer: ruleBasedScorer({ minScoreToBuy }),
-    historicalSignalsByDate,
+    scorer: activeScorer,
+    historicalSignalsByDate: strategyId === "momentum-v1" ? historicalSignalsByDate : {},
   };
 
   const optimized = shouldOptimize
@@ -271,7 +283,7 @@ async function main() {
   const effectiveMinScoreToBuy = optimized.optimization?.optimizedParams.minScoreToBuy ?? minScoreToBuy;
   const baseLatestPlan = await buildLatestPlan(series, {
     decisionDate: lastBar.date,
-    scorer: ruleBasedScorer({ minScoreToBuy: effectiveMinScoreToBuy }),
+    scorer: activeStrategy.createScorer({ minScoreToBuy: effectiveMinScoreToBuy }),
     maxPositions: result.config.maxPositions,
     minScoreToBuy: effectiveMinScoreToBuy,
   });
@@ -287,6 +299,7 @@ async function main() {
     generated_at: new Date().toISOString(),
     snapshot_basis: snapshotBasis,
     snapshot_label: snapshotLabel,
+    strategy: { id: activeStrategy.id, name: activeStrategy.name, codename: activeStrategy.codename, description: activeStrategy.description },
     config: result.config,
     stats: result.stats,
     equityCurve: result.equityCurve,

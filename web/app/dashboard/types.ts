@@ -39,6 +39,7 @@ export interface DashboardData {
   generated_at: string;
   snapshot_basis?: "latest-complete-close" | "intraday-midday";
   snapshot_label?: string;
+  strategy?: { id: string; name: string; codename: string; description: string };
   config: {
     startCash: number;
     rebalanceEveryNDays: number;
@@ -61,6 +62,9 @@ export interface DashboardData {
     trades: number;
     winRatePct?: number;
     turnoverPct?: number;
+    roundTrips?: number;
+    roundTripWinRatePct?: number;
+    avgRoundTripPnlPct?: number;
   };
   equityCurve: Array<{
     date: string;
