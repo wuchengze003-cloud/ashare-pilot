@@ -25,7 +25,8 @@ import { optimizeBacktest, type OptimizationResult } from "../lib/backtestOptimi
 import { getStrategy, getDefaultStrategy, STRATEGIES } from "../lib/strategyRegistry";
 import { buildLatestPlan, buildPromotedModelPlan, type LatestPlan } from "../lib/latestPlan";
 import { modelSnapshotForDate } from "../lib/mlShadow";
-import { readRuntimeJson, writeRuntimeJson } from "../lib/runtimeData";
+import { readRuntimeJson, writeRuntimeJson, writeStrategyJson, runtimeStrategyDir } from "../lib/runtimeData";
+import { toCostConfig, roundTripBps } from "../lib/costConfig";
 import {
   buildSignalHistorySnapshot,
   readSignalHistorySnapshots,
@@ -37,6 +38,109 @@ import {
   buildSymbolSeriesFromPyserverCache,
   type PriceRow,
 } from "../lib/dashboardData";
+import {
+  fetchMoneyflow,
+  fetchMarginDetail,
+  fetchIndexDaily,
+  fetchMarketBreadth,
+  type MoneyflowRow,
+  type MarginRow,
+  type IndexDailyRow,
+  type MarketBreadth,
+} from "../lib/pyserver";
+
+/**
+ * Fetch strategy-specific enhancement data from pyserver.
+ * - Tide: real moneyflow + margin detail for all universe symbols
+ * - Prism: index daily (CSI300) + market breadth for regime detection
+ * - Momentum-V1: no additional data needed
+ *
+ * Returns an object that can be spread into createScorer() options.
+ * All fetches are best-effort: if pyserver is unavailable, the strategy
+ * gracefully falls back to V1 behavior.
+ */
+async function fetchStrategyScorerData(
+  strategyId: string,
+  symbols: string[],
+): Promise<Record<string, unknown>> {
+  const opts: Record<string, unknown> = {};
+
+  if (strategyId === "tide") {
+    try {
+      console.log("[tide] Fetching moneyflow + margin data from pyserver...");
+      const moneyflowData: Record<string, MoneyflowRow[]> = {};
+      const marginData: Record<string, MarginRow[]> = {};
+
+      // Fetch with limited concurrency to avoid overwhelming pyserver
+      const CONCURRENCY = 10;
+      for (let i = 0; i < symbols.length; i += CONCURRENCY) {
+        const batch = symbols.slice(i, i + CONCURRENCY);
+        const results = await Promise.allSettled(
+          batch.map(async (sym) => {
+            const [mf, mg] = await Promise.allSettled([
+              fetchMoneyflow(sym, 20),
+              fetchMarginDetail(sym, 20),
+            ]);
+            return { sym, mf, mg };
+          }),
+        );
+        for (const r of results) {
+          if (r.status === "fulfilled") {
+            const { sym, mf, mg } = r.value;
+            if (mf.status === "fulfilled" && mf.value.rows.length > 0) {
+              moneyflowData[sym] = mf.value.rows;
+            }
+            if (mg.status === "fulfilled" && mg.value.rows.length > 0) {
+              marginData[sym] = mg.value.rows;
+            }
+          }
+        }
+      }
+
+      if (Object.keys(moneyflowData).length > 0) opts.moneyflowData = moneyflowData;
+      if (Object.keys(marginData).length > 0) opts.marginData = marginData;
+      console.log(
+        `[tide] Moneyflow: ${Object.keys(moneyflowData).length}/${symbols.length} symbols, ` +
+        `Margin: ${Object.keys(marginData).length}/${symbols.length} symbols`,
+      );
+    } catch (err) {
+      console.log(
+        `[tide] Enhancement data fetch failed (will use V1 fallback): ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  } else if (strategyId === "prism") {
+    try {
+      console.log("[prism] Fetching index daily + market breadth from pyserver...");
+      const [indexResult, breadthResult] = await Promise.allSettled([
+        fetchIndexDaily("000300.SH", 60),
+        fetchMarketBreadth(),
+      ]);
+      if (indexResult.status === "fulfilled") {
+        opts.indexData = indexResult.value.rows as IndexDailyRow[];
+        console.log(`[prism] Index daily: ${indexResult.value.rows.length} bars (CSI300)`);
+      } else {
+        console.log("[prism] Index daily fetch failed, using cross-sectional fallback");
+      }
+      if (breadthResult.status === "fulfilled") {
+        opts.marketBreadth = breadthResult.value as MarketBreadth;
+        console.log(
+          `[prism] Market breadth: advance_ratio=${breadthResult.value.advance_ratio.toFixed(2)}, ` +
+          `new_high_20=${breadthResult.value.new_high_20}, new_low_20=${breadthResult.value.new_low_20}`,
+        );
+      } else {
+        console.log("[prism] Market breadth fetch failed, using cross-sectional fallback");
+      }
+    } catch (err) {
+      console.log(
+        `[prism] Enhancement data fetch failed (will use V1 fallback): ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  return opts;
+}
 
 function shanghaiNowParts() {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -120,6 +224,7 @@ interface DashboardOutput {
   optimizationWarnings?: string[];
   optimizationCandidates?: OptimizationResult["candidates"];
   researchStatus?: Record<string, unknown> | null;
+  strategy_status?: string;
 }
 
 function computeBenchmarkCurve(benchmark: PriceRow[], cfg: BacktestConfig) {
@@ -238,6 +343,7 @@ async function main() {
     : endDate;
   const activeUniverse = activeEntriesAsOf(universe, endDate);
 
+  const unifiedCost = toCostConfig();
   const cfg: BacktestConfig = {
     startCash: 1_000_000,
     rebalanceEveryNDays: decisionEveryNDays,
@@ -245,13 +351,8 @@ async function main() {
     executionPrice: "next_open",
     startDate,
     endDate,
-    feeBps: 10,
-    costConfig: {
-      buyCommissionBps: 2.5,
-      sellCommissionBps: 2.5,
-      stampDutyBps: 5,
-      slippageBps: 3,
-    },
+    feeBps: roundTripBps() / 2,  // legacy per-side field, kept for backward compat
+    costConfig: unifiedCost,
     maxPositions,
     autoSellUnselected: true,
     minHoldBars,
@@ -264,14 +365,17 @@ async function main() {
       .filter((snapshot) => snapshot.signal_date < endDate)
       .map((snapshot) => [snapshot.signal_date, snapshot.signals]),
   );
-  const activeScorer = activeStrategy.createScorer({ minScoreToBuy });
+  // Fetch strategy-specific enhancement data (moneyflow/margin for Tide, index/breadth for Prism)
+  const allSymbols = series.map((s) => s.entry.symbol);
+  const activeScorerData = await fetchStrategyScorerData(strategyId, allSymbols);
+  const activeScorer = activeStrategy.createScorer({ minScoreToBuy, ...activeScorerData });
   const runOptions = {
     scorer: activeScorer,
     historicalSignalsByDate: strategyId === "momentum-v1" ? historicalSignalsByDate : {},
   };
 
   const optimized = shouldOptimize
-    ? await optimizeBacktest(series, cfg)
+    ? await optimizeBacktest(series, cfg, (opts) => activeStrategy.createScorer({ ...activeScorerData, ...opts }))
     : {
       result: await runBacktest(series, cfg, runOptions),
       optimization: null,
@@ -283,7 +387,7 @@ async function main() {
   const effectiveMinScoreToBuy = optimized.optimization?.optimizedParams.minScoreToBuy ?? minScoreToBuy;
   const baseLatestPlan = await buildLatestPlan(series, {
     decisionDate: lastBar.date,
-    scorer: activeStrategy.createScorer({ minScoreToBuy: effectiveMinScoreToBuy }),
+    scorer: activeStrategy.createScorer({ minScoreToBuy: effectiveMinScoreToBuy, ...activeScorerData }),
     maxPositions: result.config.maxPositions,
     minScoreToBuy: effectiveMinScoreToBuy,
   });
@@ -322,9 +426,16 @@ async function main() {
     optimizationWarnings: optimized.optimization?.warnings ?? [],
     optimizationCandidates: optimized.optimization?.candidates ?? [],
     researchStatus: readRuntimeJson<Record<string, unknown>>("ml/status.json"),
+    strategy_status: strategyId === "tide" && activeScorerData.moneyflowData === undefined
+      ? "suspended"
+      : strategyId === "prism" && activeScorerData.indexData === undefined
+        ? "degraded"
+        : "active",
   };
 
   writeRuntimeJson("backtest.json", output);
+  // Also write to per-strategy namespace
+  writeStrategyJson(activeStrategy.id, "backtest.json", output);
   const signalsOutput = {
     generated_at: new Date().toISOString(),
     source: latestPlan.source,
@@ -363,11 +474,154 @@ async function main() {
     signals: latestPlan.signals,
   };
   writeRuntimeJson("signals.json", signalsOutput);
-  writeSignalHistorySnapshot(buildSignalHistorySnapshot(latestPlan, series));
+  writeStrategyJson(activeStrategy.id, "signals.json", signalsOutput);
+  writeSignalHistorySnapshot(buildSignalHistorySnapshot(latestPlan, series), activeStrategy.id);
   writeRuntimeJson("meta.json", {
     generated_at: new Date().toISOString(),
     universe_count: activeUniverse.length,
   });
+
+  // --- Multi-strategy: run remaining strategies and write to per-strategy dirs ---
+  const runAllStrategies = process.env.DASHBOARD_ALL_STRATEGIES === "1";
+  const strategySummaries: Array<{ id: string; name: string; stats: BacktestResult["stats"] }> = [
+    { id: activeStrategy.id, name: activeStrategy.name, stats: result.stats },
+  ];
+
+  if (runAllStrategies) {
+    for (const strategy of STRATEGIES) {
+      if (strategy.id === activeStrategy.id) continue;
+      console.log(`\n--- Running strategy: ${strategy.name} (${strategy.codename}) [${strategy.id}] ---`);
+      const stratScorerData = await fetchStrategyScorerData(strategy.id, allSymbols);
+      const stratScorer = strategy.createScorer({ minScoreToBuy, ...stratScorerData });
+      const stratResult = await runBacktest(series, cfg, {
+        scorer: stratScorer,
+        historicalSignalsByDate: strategy.id === "momentum-v1" ? historicalSignalsByDate : {},
+      });
+      const stratBenchmarkCurve = computeBenchmarkCurve(benchmark, stratResult.config);
+      const stratLastBar = stratResult.equityCurve[stratResult.equityCurve.length - 1];
+      const stratPlan = await buildLatestPlan(series, {
+        decisionDate: stratLastBar.date,
+        scorer: strategy.createScorer({ minScoreToBuy, ...stratScorerData }),
+        maxPositions: stratResult.config.maxPositions,
+        minScoreToBuy,
+      });
+      const stratOutput: DashboardOutput = {
+        generated_at: new Date().toISOString(),
+        snapshot_basis: snapshotBasis,
+        snapshot_label: snapshotLabel,
+        strategy: { id: strategy.id, name: strategy.name, codename: strategy.codename, description: strategy.description },
+        config: stratResult.config,
+        stats: stratResult.stats,
+        equityCurve: stratResult.equityCurve,
+        benchmarkCurve: stratBenchmarkCurve,
+        trades: stratResult.trades,
+        themePerformance: computeThemePerformance(stratResult, series),
+        signalsByDate: stratResult.signalsByDate,
+        latestPlan: stratPlan,
+        latestHoldings: stratLastBar.positions,
+        latestDate: stratLastBar.date,
+        meetsSharpeTarget: stratResult.stats.sharpe >= (stratResult.config.sharpeTarget ?? 3),
+        primaryWindow: "post_cny_2026",
+        optimizedParams: {
+          maxPositions: stratResult.config.maxPositions,
+          minHoldBars: stratResult.config.minHoldBars ?? 0,
+          rebalanceThresholdPct: stratResult.config.rebalanceThresholdPct ?? 0,
+          minScoreToBuy,
+        },
+        optimizationWarnings: [],
+        optimizationCandidates: [],
+        researchStatus: null,
+        strategy_status: strategy.id === "tide" && stratScorerData.moneyflowData === undefined
+          ? "suspended"
+          : strategy.id === "prism" && stratScorerData.indexData === undefined
+            ? "degraded"
+            : "active",
+      };
+      writeStrategyJson(strategy.id, "backtest.json", stratOutput);
+      const stratSignals = {
+        generated_at: new Date().toISOString(),
+        source: stratPlan.source,
+        score_model: stratPlan.scoreModel,
+        signal_date: stratPlan.decisionDate,
+        latest_complete_date: latestCompleteDate,
+        signal_basis: snapshotBasis,
+        snapshot_label: snapshotLabel,
+        max_positions: stratPlan.maxPositions,
+        universe_count: activeUniverse.length,
+        scored_count: stratPlan.signals.length,
+        signals: stratPlan.signals,
+      };
+      writeStrategyJson(strategy.id, "signals.json", stratSignals);
+      writeSignalHistorySnapshot(buildSignalHistorySnapshot(stratPlan, series), strategy.id);
+      strategySummaries.push({ id: strategy.id, name: strategy.name, stats: stratResult.stats });
+      console.log(
+        `  Return: ${stratResult.stats.totalReturnPct.toFixed(2)}%  ` +
+          `Sharpe: ${stratResult.stats.sharpe.toFixed(2)}  ` +
+          `Trades: ${stratResult.stats.trades}`,
+      );
+    }
+
+    // Write strategy comparison
+    writeRuntimeJson("strategy-comparison.json", {
+      generated_at: new Date().toISOString(),
+      data_date: endDate,
+      strategies: strategySummaries.map((s) => ({
+        id: s.id,
+        name: s.name,
+        totalReturnPct: s.stats.totalReturnPct,
+        cagrPct: s.stats.cagrPct,
+        maxDrawdownPct: s.stats.maxDrawdownPct,
+        sharpe: s.stats.sharpe,
+        trades: s.stats.trades,
+        winRatePct: s.stats.winRatePct,
+        turnoverPct: s.stats.turnoverPct,
+      })),
+    });
+    console.log("\nWrote strategy-comparison.json");
+  }
+
+  // --- Generate manifest.json ---
+  const { execSync } = await import("node:child_process");
+  const crypto = await import("node:crypto");
+  let gitSha = "unknown";
+  try { gitSha = execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim(); } catch { /* not in git */ }
+  let universeSha = "unknown";
+  try {
+    const universeContent = fs.readFileSync(path.resolve(process.cwd(), "data/universe.json"), "utf-8");
+    universeSha = crypto.createHash("sha256").update(universeContent).digest("hex").slice(0, 16);
+  } catch { /* universe not found */ }
+
+  // Compute per-strategy file SHA-256 and parameter versions
+  const manifestStrategies = strategySummaries.map((s) => {
+    const stratMeta = getStrategy(s.id);
+    const params = {
+      minScoreToBuy: stratMeta?.defaultMinScore ?? minScoreToBuy,
+      maxPositions,
+      minHoldBars,
+      rebalanceThresholdPct,
+    };
+    const fileHashes: Record<string, string> = {};
+    for (const fileName of ["backtest.json", "signals.json"]) {
+      try {
+        const filePath = path.join(runtimeStrategyDir(s.id), fileName);
+        const content = fs.readFileSync(filePath, "utf-8");
+        fileHashes[fileName] = crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
+      } catch { /* file not written yet */ }
+    }
+    return { id: s.id, name: s.name, params, file_sha256: fileHashes };
+  });
+
+  writeRuntimeJson("manifest.json", {
+    generated_at: new Date().toISOString(),
+    git_sha: gitSha,
+    universe_sha: universeSha,
+    data_date: endDate,
+    latest_complete_date: latestCompleteDate,
+    snapshot_basis: snapshotBasis,
+    strategies: manifestStrategies,
+    cost_model: "config/cost-model.json",
+  });
+
   assertRuntimeArtifacts(readRuntimeValidationInput());
   console.log("Wrote runtime backtest/signals/history/meta to web/data/runtime");
   console.log(

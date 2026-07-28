@@ -15,6 +15,32 @@ export function runtimeDataPath(name: string): string {
   return path.join(runtimeDataDir(), name);
 }
 
+/**
+ * Per-strategy runtime directory: `<runtimeDir>/strategies/<strategyId>/`.
+ * Each strategy gets its own backtest.json, signals.json, and history/.
+ */
+export function runtimeStrategyDir(strategyId: string): string {
+  return path.join(runtimeDataDir(), "strategies", strategyId);
+}
+
+export function runtimeStrategyPath(strategyId: string, name: string): string {
+  return path.join(runtimeStrategyDir(strategyId), name);
+}
+
+/** Read a JSON file from a strategy-specific runtime directory. */
+export function readStrategyJson<T>(strategyId: string, name: string): T | null {
+  const file = runtimeStrategyPath(strategyId, name);
+  if (!fs.existsSync(file)) return null;
+  return JSON.parse(fs.readFileSync(file, "utf-8")) as T;
+}
+
+/** Write a JSON file to a strategy-specific runtime directory. */
+export function writeStrategyJson(strategyId: string, name: string, value: unknown): void {
+  const file = runtimeStrategyPath(strategyId, name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", "utf-8");
+}
+
 export function readRuntimeJson<T>(name: string): T | null {
   const file = runtimeDataPath(name);
   if (!fs.existsSync(file)) return null;

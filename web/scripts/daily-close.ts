@@ -1,7 +1,7 @@
 // End-of-day control plane for the local and deployed strategy application.
 //
 // This deliberately keeps market/news interpretation outside deterministic
-// code. A Codex automation runs this command, then produces the sourced recap.
+// code. A Hermes automation runs this command, then produces the sourced recap.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -279,9 +279,9 @@ async function main() {
 
   try {
     await ensurePyserver(steps, pyserverUrl);
-    runCommand(steps, "refresh market data and dashboard", "npm", ["run", "dashboard:update"], {
+    runCommand(steps, "refresh market data and dashboard (all strategies)", "npm", ["run", "dashboard:update"], {
       cwd: webRoot,
-      env: { ...process.env, PYSERVER_URL: pyserverUrl },
+      env: { ...process.env, PYSERVER_URL: pyserverUrl, DASHBOARD_ALL_STRATEGIES: "1" },
     });
     runCommand(steps, "validate runtime consistency", "npm", ["run", "dashboard:validate"], { cwd: webRoot });
 

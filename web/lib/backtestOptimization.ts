@@ -1,5 +1,4 @@
-import { runBacktest, type BacktestConfig, type BacktestResult, type SymbolSeries } from "./backtest";
-import { ruleBasedScorer } from "./dashboardBacktest";
+import { runBacktest, type BacktestConfig, type BacktestResult, type Scorer, type SymbolSeries } from "./backtest";
 
 export interface OptimizationCandidate {
   config: BacktestConfig;
@@ -43,6 +42,7 @@ function warningsFor(result: BacktestResult, sharpeTarget: number): string[] {
 export async function optimizeBacktest(
   series: SymbolSeries[],
   baseConfig: BacktestConfig,
+  scorerFactory: (opts?: Record<string, unknown>) => Scorer,
 ): Promise<{ result: BacktestResult; optimization: OptimizationResult }> {
   const maxPositionsSet = [4, 5, 6];
   const minHoldBarsSet = [3, 5, 7, 10];
@@ -62,7 +62,7 @@ export async function optimizeBacktest(
             rebalanceThresholdPct,
           };
           const result = await runBacktest(series, config, {
-            scorer: ruleBasedScorer({ minScoreToBuy }),
+            scorer: scorerFactory({ minScoreToBuy }),
           });
           const key = JSON.stringify({ maxPositions, minHoldBars, rebalanceThresholdPct, minScoreToBuy });
           resultByKey.set(key, result);
@@ -116,7 +116,7 @@ export async function optimizeBacktest(
     optimizationWindow: "jan_2026",
   };
   const janValidation = await runBacktest(series, janConfig, {
-    scorer: ruleBasedScorer({ minScoreToBuy: optimizedParams.minScoreToBuy }),
+    scorer: scorerFactory({ minScoreToBuy: optimizedParams.minScoreToBuy }),
   });
 
   const optimization: OptimizationResult = {

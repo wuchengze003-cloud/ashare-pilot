@@ -66,12 +66,15 @@ export function buildSignalHistorySnapshot(
   };
 }
 
-export function writeSignalHistorySnapshot(snapshot: SignalHistorySnapshot): void {
+export function writeSignalHistorySnapshot(snapshot: SignalHistorySnapshot, strategyId = "momentum-v1"): void {
+  // Write to both the legacy flat path (backward compat) and the per-strategy path
   writeRuntimeJson(`signals-history/${snapshot.signal_date}.json`, snapshot);
+  writeRuntimeJson(`strategies/${strategyId}/history/${snapshot.signal_date}.json`, snapshot);
 }
 
-export function readSignalHistorySnapshots(limit = 20): SignalHistorySnapshot[] {
-  return listRuntimeJson<SignalHistorySnapshot>("signals-history")
+export function readSignalHistorySnapshots(limit = 20, strategyId?: string): SignalHistorySnapshot[] {
+  const dir = strategyId ? `strategies/${strategyId}/history` : "signals-history";
+  return listRuntimeJson<SignalHistorySnapshot>(dir)
     .map((item) => item.data)
     .sort((a, b) => (a.signal_date < b.signal_date ? 1 : -1))
     .slice(0, limit);
