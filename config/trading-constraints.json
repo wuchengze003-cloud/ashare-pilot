@@ -1,0 +1,42 @@
+{
+  "$schema": "trading-constraints/v1",
+  "description": "统一交易约束配置，Web 和 Research 共用。所有板块统一处理，不排除科创板。",
+  "boards": {
+    "allowed": ["main", "star", "chinext", "bse"],
+    "note": "688 科创板不排除，所有板块统一处理",
+    "price_limit_fractions": {
+      "main": 0.10,
+      "main_st": 0.05,
+      "star": 0.20,
+      "chinext": 0.20,
+      "bse": 0.30
+    },
+    "symbol_prefixes": {
+      "main": ["600", "601", "603", "605", "000", "001", "002", "003"],
+      "star": ["688"],
+      "chinext": ["300", "301"],
+      "bse": ["4", "8", "92"]
+    }
+  },
+  "buy_constraints": {
+    "exclude_limit_up": true,
+    "limit_slack": 0.003,
+    "max_one_day_return_to_buy": 0.095,
+    "note": "涨停板不买入；max_one_day_return_to_buy 对主板接近涨停也过滤"
+  },
+  "risk_management": {
+    "initial_capital_yuan": 1000000,
+    "max_drawdown_pct": 20,
+    "max_single_position_pct": 25,
+    "max_single_theme_pct": 40,
+    "max_positions": 5,
+    "note": "参考开源量化项目设计：初始资金100万，最大回撤20%，单只25%，单主题40%"
+  },
+  "execution": {
+    "decision_timing": "post_close",
+    "execution_price": "next_open",
+    "min_holding_bars": 5,
+    "rebalance_threshold_pct": 5,
+    "note": "收盘后决策，次日开盘执行"
+  }
+}

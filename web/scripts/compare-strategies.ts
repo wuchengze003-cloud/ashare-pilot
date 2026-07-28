@@ -13,6 +13,7 @@ import {
 } from "../lib/universe";
 import { runBacktest, type BacktestConfig } from "../lib/backtest";
 import { STRATEGIES } from "../lib/strategyRegistry";
+import { toCostConfig, roundTripBps } from "../lib/costConfig";
 import {
   buildSymbolSeries,
   buildSymbolSeriesFromPyserverCache,
@@ -48,6 +49,7 @@ async function main() {
     process.exit(1);
   }
 
+  const unifiedCost = toCostConfig();
   const baseCfg: BacktestConfig = {
     startCash: 1_000_000,
     rebalanceEveryNDays: 1,
@@ -55,13 +57,8 @@ async function main() {
     executionPrice: "next_open",
     startDate,
     endDate,
-    feeBps: 10,
-    costConfig: {
-      buyCommissionBps: 2.5,
-      sellCommissionBps: 2.5,
-      stampDutyBps: 5,
-      slippageBps: 3,
-    },
+    feeBps: roundTripBps() / 2,  // legacy per-side field, derived from cost model
+    costConfig: unifiedCost,
     maxPositions: 4,
     autoSellUnselected: true,
     minHoldBars: 5,

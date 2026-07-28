@@ -1,0 +1,14 @@
+{
+  "$schema": "Unified A-share transaction cost model shared by TypeScript (web) and Python (research)",
+  "buy_commission_bps": 2.5,
+  "sell_commission_bps": 2.5,
+  "stamp_duty_bps": 5.0,
+  "base_slippage_bps": 3.0,
+  "minimum_commission_yuan": 5.0,
+  "impact_model": "sqrt-volume",
+  "$derived": {
+    "buy_total_bps": 5.5,
+    "sell_total_bps": 10.5,
+    "round_trip_bps": 16.0
+  }
+}
