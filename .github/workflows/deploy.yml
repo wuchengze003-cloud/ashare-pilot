@@ -32,6 +32,13 @@ jobs:
           envs: DEPLOY_PATH
           script: |
             set -euo pipefail
+
+            if [ ! -d "$DEPLOY_PATH/.git" ]; then
+              echo "[deploy] First-time setup: cloning repo to $DEPLOY_PATH..."
+              mkdir -p "$(dirname "$DEPLOY_PATH")"
+              git clone https://github.com/wuchengze003-cloud/ashare-pilot.git "$DEPLOY_PATH"
+            fi
+
             cd "$DEPLOY_PATH"
 
             echo "[deploy] Pulling latest main..."
