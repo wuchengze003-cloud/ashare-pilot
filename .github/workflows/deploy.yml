@@ -21,7 +21,7 @@ jobs:
       github.event_name == 'workflow_dispatch'
     steps:
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@7eaf66e414980190e4b8a2e0c5a14c1a5b8b3b8f  # v1.2.0
+        uses: appleboy/ssh-action@v1.2.0
         env:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/opt/ashare-pilot' }}
         with:
