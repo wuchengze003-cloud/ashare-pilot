@@ -67,3 +67,51 @@ export function ThemeChart({ data }: { data: ThemePoint[] }) {
     </ResponsiveContainer>
   );
 }
+
+interface ComparisonEquityPoint {
+  date: string;
+  [key: string]: string | number | null;
+}
+
+const STRATEGY_COLORS: Record<string, string> = {
+  "momentum-v1": "#7cf0a0",
+  tide: "#63a1ff",
+  prism: "#e8a0ff",
+};
+
+export function ComparisonEquityChart({
+  data,
+  strategyIds,
+}: {
+  data: Array<Record<string, string | number | null>>;
+  strategyIds: string[];
+}) {
+  return (
+    <ResponsiveContainer>
+      <LineChart data={data}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+        <XAxis dataKey="date" stroke="#8b96a8" minTickGap={40} />
+        <YAxis stroke="#8b96a8" domain={["auto", "auto"]} tickFormatter={(v) => `${(v / 1e4).toFixed(0)}万`} />
+        <Tooltip
+          contentStyle={{ background: "#131a26", border: "1px solid #1f2937" }}
+          formatter={(v) => (typeof v === "number" ? fmtMoney(v) : "数据未覆盖")}
+        />
+        {strategyIds.map((id) => (
+          <Line
+            key={id}
+            type="monotone"
+            dataKey={id}
+            stroke={STRATEGY_COLORS[id] ?? "#8b96a8"}
+            dot={false}
+            strokeWidth={2}
+            name={id}
+            connectNulls
+          />
+        ))}
+        {data.some((p) => p.benchmark != null) ? (
+          <Line type="monotone" dataKey="benchmark" stroke="#f2b84b" dot={false} strokeWidth={2} name="沪深300" connectNulls />
+        ) : null}
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}

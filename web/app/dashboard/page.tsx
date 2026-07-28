@@ -1,17 +1,28 @@
 import Link from "next/link";
-import { readRuntimeJson } from "@/lib/runtimeData";
-import { readSignalHistorySnapshots } from "@/lib/signalHistory";
-import { buildBuySignalHistoryRows } from "@/lib/buySignalHistory";
+import { readRuntimeJson, readStrategyJson } from "@/lib/runtimeData";
 import { loadEntries } from "@/lib/universe";
 import { STRATEGIES } from "@/lib/strategyRegistry";
-import { BuySignalHistoryTable } from "./BuySignalHistoryTable";
-import { EquityChart, ThemeChart } from "./Charts";
+import { ComparisonEquityChart } from "./Charts";
 import type { DashboardData } from "./types";
 
 export const dynamic = "force-dynamic";
 
-function loadDashboardData(): DashboardData | null {
-  return readRuntimeJson<DashboardData>("backtest.json");
+interface StrategyComparisonEntry {
+  id: string;
+  name: string;
+  totalReturnPct: number;
+  cagrPct: number;
+  maxDrawdownPct: number;
+  sharpe: number;
+  trades: number;
+  winRatePct?: number;
+  turnoverPct?: number;
+}
+
+interface StrategyComparison {
+  generated_at: string;
+  data_date: string;
+  strategies: StrategyComparisonEntry[];
 }
 
 function pct(v: number, digits = 2) {
@@ -26,524 +37,413 @@ function numberOrDash(v: number | null | undefined, digits = 2) {
   return v == null || Number.isNaN(v) ? "暂无" : v.toFixed(digits);
 }
 
-function pctOrDash(v: number | null | undefined, digits = 1) {
-  return v == null || Number.isNaN(v) ? "暂无" : pct(v, digits);
-}
+/**
+ * Compute pairwise return correlation between two equity curve series,
+ * aligned by date. Returns null if insufficient overlap.
+ */
+function correlation(
+  seriesA: Array<{ date: string; equity: number }>,
+  seriesB: Array<{ date: string; equity: number }>,
+): number | null {
+  const mapA = new Map(seriesA.map((p) => [p.date, p.equity]));
+  const mapB = new Map(seriesB.map((p) => [p.date, p.equity]));
+  const dates = [...mapA.keys()].filter((d) => mapB.has(d)).sort();
+  if (dates.length < 5) return null;
 
-function sideLabel(side: "buy" | "sell" | "reduce") {
-  if (side === "buy") return "买入";
-  if (side === "reduce") return "减仓";
-  return "卖出";
-}
+  // Convert to daily returns
+  const retA: number[] = [];
+  const retB: number[] = [];
+  for (let i = 1; i < dates.length; i++) {
+    const prevA = mapA.get(dates[i - 1])!;
+    const curA = mapA.get(dates[i])!;
+    const prevB = mapB.get(dates[i - 1])!;
+    const curB = mapB.get(dates[i])!;
+    if (prevA > 0 && prevB > 0) {
+      retA.push(curA / prevA - 1);
+      retB.push(curB / prevB - 1);
+    }
+  }
+  if (retA.length < 3) return null;
 
-function shadowActionLabel(action: "buy" | "hold" | "sell" | "cash") {
-  if (action === "buy") return "候选买入";
-  if (action === "sell") return "候选卖出";
-  if (action === "cash") return "持币";
-  return "候选持有";
+  const n = retA.length;
+  const meanA = retA.reduce((s, v) => s + v, 0) / n;
+  const meanB = retB.reduce((s, v) => s + v, 0) / n;
+  let cov = 0;
+  let varA = 0;
+  let varB = 0;
+  for (let i = 0; i < n; i++) {
+    cov += (retA[i] - meanA) * (retB[i] - meanB);
+    varA += (retA[i] - meanA) ** 2;
+    varB += (retB[i] - meanB) ** 2;
+  }
+  const denom = Math.sqrt(varA * varB);
+  return denom > 0 ? cov / denom : null;
 }
 
 export default function DashboardPage() {
-  const data = loadDashboardData();
+  const comparison = readRuntimeJson<StrategyComparison>("strategy-comparison.json");
   const universe = loadEntries();
-  const analyst = readRuntimeJson<{
-    items?: Array<{ symbol: string; current_price?: number | null; current_price_as_of?: string | null }>;
-  }>("analyst.json");
-  const history = readSignalHistorySnapshots(Number.POSITIVE_INFINITY);
   const nameMap = new Map(universe.map((e) => [e.symbol, e.name]));
-  const themeMap = new Map(universe.map((e) => [e.symbol, e.theme]));
-  const currentPriceBySymbol = new Map((analyst?.items ?? []).map((item) => [item.symbol, item.current_price ?? null]));
-  const currentAsOfBySymbol = new Map((analyst?.items ?? []).map((item) => [item.symbol, item.current_price_as_of ?? null]));
 
-  const themeData = data
-    ? data.themePerformance
-        .map((t) => ({
-          theme: t.theme,
-          returnPct: Number(t.returnPct.toFixed(2)),
-          realizedPct: Number(t.realizedPct.toFixed(2)),
-          unrealizedPct: Number(t.unrealizedPct.toFixed(2)),
-          avgWeightPct: Number(t.avgWeightPct.toFixed(2)),
-        }))
-        .sort((a, b) => b.returnPct - a.returnPct)
-    : [];
-
-  const hasBenchmark = Boolean(data?.benchmarkCurve.length);
-  const benchmarkFinalEquity = data?.benchmarkCurve.at(-1)?.equity ?? null;
-  const benchmarkReturnPct =
-    data && hasBenchmark && benchmarkFinalEquity != null
-      ? ((benchmarkFinalEquity / data.config.startCash) - 1) * 100
-      : null;
-  const sharpeTarget = data?.config.sharpeTarget ?? 3;
-  const meetsSharpeTarget = data ? data.meetsSharpeTarget ?? data.stats.sharpe >= sharpeTarget : false;
-  const decisionEveryNDays = data ? data.config.decisionEveryNDays ?? data.config.rebalanceEveryNDays : 1;
-  const decisionCadenceLabel = decisionEveryNDays <= 1 ? "每日" : `每 ${decisionEveryNDays} 日`;
-  const latestBar = data?.equityCurve.at(-1) ?? null;
-  const holdings = data
-    ? Object.entries(data.latestHoldings)
-        .map(([sym, pos]) => ({
-          sym,
-          pos,
-          value: pos.shares * pos.price,
-        }))
-        .sort((a, b) => b.value - a.value)
-    : [];
-  const holdingsValue = holdings.reduce((sum, item) => sum + item.value, 0);
-  const latestCash = latestBar?.cash ?? 0;
-  const latestEquity = latestBar?.equity ?? holdingsValue + latestCash;
-  const cashWeight = latestEquity > 0 ? latestCash / latestEquity : 0;
-  const snapshotLabel = data?.snapshot_label ?? "完整收盘";
-  const shadowModel = data?.latestPlan?.shadowModel;
-  const championModel = data?.latestPlan?.championModel;
-  const researchStatus = data?.researchStatus;
-  const latestAssessment = researchStatus?.promotion_assessments?.at(-1);
-  const fiveDayFeedback = researchStatus?.outcome_feedback?.summary?.groups
-    ?.filter((item) => item.horizon_bars === 5)
-    .at(-1);
-  const shadowEquityByDate = new Map(
-    (shadowModel?.shadow_account?.equity_curve ?? []).map((point) => [point.date, point.equity]),
+  // Load per-strategy data
+  const strategyData: Array<{ meta: (typeof STRATEGIES)[number]; data: DashboardData | null }> = STRATEGIES.map(
+    (meta) => ({
+      meta,
+      data: readStrategyJson<DashboardData>(meta.id, "backtest.json"),
+    }),
   );
-  const equityData = data
-    ? data.equityCurve.map((point, index) => ({
-        date: point.date,
-        equity: point.equity,
-        benchmark: data.benchmarkCurve[index]?.equity ?? null,
-        shadow: shadowEquityByDate.get(point.date) ?? null,
-      }))
-    : [];
-  const decisionBasisLabel = data?.snapshot_basis === "intraday-midday" ? "午盘快照决策" : "收盘决策";
-  const targetBuys = data?.latestPlan?.signals.filter((s) => s.action === "buy" && s.size > 0) ?? [];
-  const signalMap = new Map((data?.latestPlan?.signals ?? []).map((s) => [s.symbol, s]));
-  const targetSymbols = new Set(targetBuys.map((s) => s.symbol));
-  const plannedHoldings = holdings
-    .map((h) => ({
-      symbol: h.sym,
-      signal: signalMap.get(h.sym),
-      currentWeight: latestEquity > 0 ? h.value / latestEquity : 0,
+
+  const hasAnyData = strategyData.some((s) => s.data != null);
+
+  // Build comparison equity curve overlay
+  const allDates = new Set<string>();
+  for (const { data } of strategyData) {
+    if (!data) continue;
+    for (const point of data.equityCurve) allDates.add(point.date);
+  }
+  const sortedDates = [...allDates].sort();
+  const equityOverlay: Array<Record<string, string | number | null>> = sortedDates.map((date) => {
+    const point: Record<string, string | number | null> = { date };
+    for (const { meta, data } of strategyData) {
+      if (!data) continue;
+      const bar = data.equityCurve.find((p) => p.date === date);
+      point[meta.id] = bar ? bar.equity : null;
+    }
+    // Use first available strategy's benchmark
+    const firstWithBenchmark = strategyData.find((s) => s.data?.benchmarkCurve.some((p) => p.date === date));
+    point.benchmark = firstWithBenchmark?.data?.benchmarkCurve.find((p) => p.date === date)?.equity ?? null;
+    return point;
+  });
+
+  // Compute pairwise correlations
+  const correlations: Array<{ a: string; b: string; value: number | null }> = [];
+  for (let i = 0; i < strategyData.length; i++) {
+    for (let j = i + 1; j < strategyData.length; j++) {
+      const a = strategyData[i];
+      const b = strategyData[j];
+      correlations.push({
+        a: a.meta.name,
+        b: b.meta.name,
+        value: a.data && b.data
+          ? correlation(a.data.equityCurve, b.data.equityCurve)
+          : null,
+      });
+    }
+  }
+
+  // Find common holdings across strategies
+  const holdingsByStrategy = strategyData.map(({ meta, data }) => {
+    const held = data ? new Set(Object.keys(data.latestHoldings)) : new Set<string>();
+    return { meta, held };
+  });
+  const allHeldSymbols = new Set<string>();
+  for (const { held } of holdingsByStrategy) {
+    for (const sym of held) allHeldSymbols.add(sym);
+  }
+  const commonHoldings = [...allHeldSymbols]
+    .map((sym) => ({
+      symbol: sym,
+      name: nameMap.get(sym) ?? "名称未收录",
+      strategies: holdingsByStrategy
+        .filter((h) => h.held.has(sym))
+        .map((h) => h.meta.name),
+      count: holdingsByStrategy.filter((h) => h.held.has(sym)).length,
     }))
-    .map((h) => ({
-      symbol: h.symbol,
-      side: h.signal?.action === "sell" ? "sell" as const : h.signal?.action === "buy" ? "buy" as const : "hold" as const,
-      label: h.signal?.action === "sell" ? "卖出" : "持有",
-      targetWeight: h.signal?.action === "sell"
-        ? 0
-        : h.signal?.action === "buy"
-          ? h.signal.size
-          : h.currentWeight,
-      reason: h.signal?.rationale ?? "未生成信号",
-    }));
-  const heldSymbols = new Set(holdings.map((h) => h.sym));
-  const plannedBuys = targetBuys
-    .filter((s) => !heldSymbols.has(s.symbol))
-    .map((s) => ({
-      symbol: s.symbol,
-      side: "buy" as const,
-      label: "买入",
-      targetWeight: s.size,
-      reason: cashWeight < s.size ? `现金不足，需先卖出释放仓位；${s.rationale}` : s.rationale,
-    }));
-  const plannedOrders = [...plannedHoldings, ...plannedBuys];
-  const buySignalHistory = buildBuySignalHistoryRows(
-    history,
-    currentPriceBySymbol,
-    currentAsOfBySymbol,
-  ).map((signal) => ({
-    ...signal,
-    name: signal.name ?? nameMap.get(signal.symbol) ?? null,
-    theme: signal.theme ?? themeMap.get(signal.symbol) ?? null,
-  }));
+    .filter((item) => item.count >= 2)
+    .sort((a, b) => b.count - a.count);
+
+  // Find common drawdown periods (both strategies drawdown > 5% on same date)
+  const drawdownByStrategy = strategyData.map(({ meta, data }) => {
+    if (!data) return { meta, drawdowns: new Map<string, number>() };
+    const map = new Map<string, number>();
+    let peak = 0;
+    for (const point of data.equityCurve) {
+      if (point.equity > peak) peak = point.equity;
+      const dd = peak > 0 ? ((point.equity - peak) / peak) * 100 : 0;
+      map.set(point.date, dd);
+    }
+    return { meta, drawdowns: map };
+  });
+  const commonDrawdownDates = sortedDates.filter((date) => {
+    const dds = drawdownByStrategy
+      .map((d) => d.drawdowns.get(date))
+      .filter((v): v is number => v != null);
+    return dds.length >= 2 && dds.every((dd) => dd < -5);
+  });
 
   return (
     <div className="container">
-      <Link href="/" className="back-link" data-umami-event="nav-home">返回股票池</Link>
+      <Link href="/" className="back-link" data-umami-event="nav-home">返回首页</Link>
       <header className="page-header compact">
         <div>
           <div className="eyebrow">Dashboard</div>
-          <h1>策略 Dashboard</h1>
+          <h1>策略对比总览</h1>
           <p>
-            {data?.strategy
-              ? `当前策略：${data.strategy.name} (${data.strategy.codename}) — ${data.strategy.description}`
-              : "基于项目股票池的可复现规则回测。数据来自本地行情侧车缓存，信号按当前运行快照生成。"}
+            三条策略共享同一股票池，独立持仓、独立权益曲线、独立交易明细。
+            点击策略名称进入独立详情页面。
           </p>
           <div className="strategy-tabs" style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
             {STRATEGIES.map((s) => (
-              <span
+              <Link
                 key={s.id}
-                className={`strategy-tab${data?.strategy?.id === s.id ? " active" : ""}`}
+                href={`/dashboard/${s.id}`}
+                className="strategy-tab"
                 style={{
                   padding: "4px 12px",
                   borderRadius: 6,
                   fontSize: 13,
                   border: "1px solid var(--border, #333)",
-                  background: data?.strategy?.id === s.id ? "var(--accent, #4f8cff)" : "transparent",
-                  color: data?.strategy?.id === s.id ? "#fff" : "var(--muted, #999)",
-                  cursor: "default",
+                  background: "transparent",
+                  color: "var(--muted, #999)",
+                  cursor: "pointer",
+                  textDecoration: "none",
+                  display: "inline-block",
                 }}
                 title={s.description}
               >
                 {s.name} <small style={{ opacity: 0.7 }}>{s.codename}</small>
-              </span>
+              </Link>
             ))}
           </div>
         </div>
       </header>
 
-      {!data && (
+      {!hasAnyData && (
         <div className="card" style={{ borderColor: "var(--warn)" }}>
           <strong>尚未生成回测数据</strong>
           <p style={{ color: "var(--muted)" }}>
             收盘后运行 <code>cd web && npm run dashboard:update</code>。
-            该命令会刷新行情缓存、重建量化模拟仓和明日计划，并写入 ignored 的{" "}
+            该命令会刷新行情缓存、重建三策略模拟仓和明日计划，并写入 ignored 的{" "}
             <code>web/data/runtime</code>。
           </p>
         </div>
       )}
 
-      {data && (
+      {hasAnyData && (
         <>
-          <div className="row" style={{ marginTop: 16 }}>
-            <Kpi label="总收益" value={pct(data.stats.totalReturnPct)} pos={data.stats.totalReturnPct >= 0} />
-            <Kpi label="年化" value={pct(data.stats.cagrPct)} pos={data.stats.cagrPct >= 0} />
-            <Kpi label="最大回撤" value={pct(data.stats.maxDrawdownPct)} pos={false} />
-            <Kpi label="夏普" value={data.stats.sharpe.toFixed(2)} pos={meetsSharpeTarget} />
-            <Kpi label="交易次数" value={data.stats.trades.toString()} />
-            <Kpi label="胜率" value={data.stats.winRatePct == null ? "暂无" : pct(data.stats.winRatePct)} pos={(data.stats.winRatePct ?? 0) >= 50} />
-            <Kpi label="换手" value={data.stats.turnoverPct == null ? "暂无" : pct(data.stats.turnoverPct, 0)} />
-            {data.stats.roundTrips != null && (
-              <Kpi label="完整交易" value={`${data.stats.roundTrips} 笔`} />
+          {/* Strategy comparison table */}
+          <h2 className="subheading">策略核心指标对比</h2>
+          <div className="card" style={{ marginTop: 8 }}>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>策略</th>
+                    <th>代号</th>
+                    <th className="num">总收益</th>
+                    <th className="num">年化</th>
+                    <th className="num">最大回撤</th>
+                    <th className="num">夏普</th>
+                    <th className="num">交易次数</th>
+                    <th className="num">胜率</th>
+                    <th className="num">换手</th>
+                    <th>详情</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {strategyData.map(({ meta, data }) => {
+                    const stats = data?.stats;
+                    const comp = comparison?.strategies.find((s) => s.id === meta.id);
+                    return (
+                      <tr key={meta.id}>
+                        <td><strong>{meta.name}</strong></td>
+                        <td className="mono">{meta.codename}</td>
+                        <td className={`num ${stats ? (stats.totalReturnPct >= 0 ? "pos" : "neg") : ""}`}>
+                          {stats ? pct(stats.totalReturnPct) : comp ? pct(comp.totalReturnPct) : "暂无"}
+                        </td>
+                        <td className={`num ${stats ? (stats.cagrPct >= 0 ? "pos" : "neg") : ""}`}>
+                          {stats ? pct(stats.cagrPct) : comp ? pct(comp.cagrPct) : "暂无"}
+                        </td>
+                        <td className="num neg">
+                          {stats ? pct(stats.maxDrawdownPct) : comp ? pct(comp.maxDrawdownPct) : "暂无"}
+                        </td>
+                        <td className="num">
+                          {stats ? stats.sharpe.toFixed(2) : comp ? comp.sharpe.toFixed(2) : "暂无"}
+                        </td>
+                        <td className="num">
+                          {stats ? stats.trades.toString() : comp ? comp.trades.toString() : "暂无"}
+                        </td>
+                        <td className="num">
+                          {stats?.winRatePct != null ? pct(stats.winRatePct) : comp?.winRatePct != null ? pct(comp.winRatePct) : "暂无"}
+                        </td>
+                        <td className="num">
+                          {stats?.turnoverPct != null ? pct(stats.turnoverPct, 0) : comp?.turnoverPct != null ? pct(comp.turnoverPct, 0) : "暂无"}
+                        </td>
+                        <td>
+                          <Link href={`/dashboard/${meta.id}`} style={{ fontSize: 13 }}>
+                            查看 →
+                          </Link>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {comparison && (
+              <div className="muted" style={{ padding: "8px 16px", fontSize: 12 }}>
+                对比数据生成于 {new Date(comparison.generated_at).toLocaleString("zh-CN")}
+                · 数据截止 {comparison.data_date}
+              </div>
             )}
-            {data.stats.roundTripWinRatePct != null && (
-              <Kpi label="交易胜率" value={pct(data.stats.roundTripWinRatePct)} pos={data.stats.roundTripWinRatePct >= 50} />
-            )}
-            <Kpi
-              label="沪深300基准"
-              value={benchmarkReturnPct == null ? "暂无数据" : pct(benchmarkReturnPct)}
-              pos={benchmarkReturnPct == null ? undefined : benchmarkReturnPct >= 0}
+          </div>
+
+          {/* Equity curve overlay */}
+          <h2 className="subheading">权益曲线对比</h2>
+          <div className="card chart-card">
+            <ComparisonEquityChart
+              data={equityOverlay}
+              strategyIds={STRATEGIES.map((s) => s.id)}
             />
           </div>
 
-          <div className="row" style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
-            <span>回测区间 {data.config.startDate} → {data.config.endDate}</span>
-            <span>·</span>
-            <span>{decisionCadenceLabel}{decisionBasisLabel}，次日开盘成交</span>
-            <span>·</span>
-            <span>{snapshotLabel}</span>
-            <span>·</span>
-            <span>最大持仓 {data.config.maxPositions} 只</span>
-            <span>·</span>
-            <span>手续费 {data.config.feeBps} bps</span>
-            <span>·</span>
-            <span>
-              参数：最短持仓 {data.config.minHoldBars ?? "未设"} 日，换手阈值 {data.config.rebalanceThresholdPct ?? 0}%
-              {data.optimizedParams ? `，买入分数 ${data.optimizedParams.minScoreToBuy.toFixed(2)}` : ""}
-            </span>
-            <span>·</span>
-            <span>生成于 {new Date(data.generated_at).toLocaleString("zh-CN")}</span>
+          {/* Correlation matrix */}
+          <h2 className="subheading">策略相关性</h2>
+          <div className="card" style={{ marginTop: 8 }}>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>策略 A</th>
+                    <th>策略 B</th>
+                    <th className="num">日收益相关系数</th>
+                    <th>解读</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {correlations.map((c, i) => (
+                    <tr key={i}>
+                      <td>{c.a}</td>
+                      <td>{c.b}</td>
+                      <td className={`num ${c.value == null ? "muted" : c.value > 0.5 ? "neg" : c.value < 0.2 ? "pos" : ""}`}>
+                        {c.value == null ? "数据不足" : c.value.toFixed(3)}
+                      </td>
+                      <td className="muted" style={{ fontSize: 13 }}>
+                        {c.value == null
+                          ? "回测数据重叠不足"
+                          : c.value > 0.7
+                            ? "高度相关，分散收益有限"
+                            : c.value > 0.4
+                              ? "中等相关，有一定分散效果"
+                              : c.value > 0.1
+                                ? "低相关，分散效果较好"
+                                : "接近独立，分散效果最佳"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-          {meetsSharpeTarget ? (
-            <div className="status-strip good">
-              Sharpe 目标已达标：当前 {data.stats.sharpe.toFixed(2)} / 目标 {sharpeTarget.toFixed(1)}。
-            </div>
-          ) : (
-            <div className="warning-strip">
-              Sharpe 目标未达标：当前 {data.stats.sharpe.toFixed(2)} / 目标 {sharpeTarget.toFixed(1)}。
-            </div>
-          )}
 
-          <h2 className="subheading">模型状态</h2>
-          <div className="theme-panel">
-            <div className="theme-title">
-              <strong>{championModel ? "ML 正式策略" : "V1 正式策略"} / ML 影子策略</strong>
-              <span>
-                {shadowModel
-                  ? `${shadowModel.model_version} · 影子，不参与交易`
-                  : championModel
-                    ? `${championModel.model_version} · 已通过晋级`
-                  : "尚无通过数据校验的 ML 预测"}
-              </span>
-            </div>
-            <div className="model-status-grid">
-              <span>
-                生产策略：{researchStatus?.production_strategy === "ml-champion" ? "ML 正式模型" : "V1 规则"}
-              </span>
-              <span>
-                候选模型：{researchStatus?.challenger_models?.length ?? 0}
-              </span>
-              <span>
-                公开基准：{researchStatus?.qlib_benchmark?.passed
-                  ? `${researchStatus.qlib_benchmark.data_cutoff} 可用，不可晋级`
-                  : "未就绪"}
-              </span>
-              {researchStatus?.qlib_benchmark?.results?.linear?.median_rank_ic != null ? (
-                <span>
-                  Alpha158 线性 6 折中位 RankIC：
-                  {researchStatus.qlib_benchmark.results.linear.median_rank_ic.toFixed(4)}
-                </span>
-              ) : null}
-              <span className={researchStatus?.tushare_production?.passed ? "pos" : "neg"}>
-                生产研究数据：{researchStatus?.tushare_production?.passed
-                  ? `通过 · ${researchStatus.tushare_production.data_cutoff ?? "截止日未知"} · ${researchStatus.tushare_production.trading_days ?? 0} 日`
-                  : "未通过"}
-              </span>
-              <span className={latestAssessment?.passed ? "pos" : "muted"}>
-                晋级状态：{researchStatus?.activation_pending
-                  ? `${researchStatus.activation_pending} 下一决策日生效`
-                  : latestAssessment?.status === "promoted"
-                    ? "已晋级"
-                    : latestAssessment?.status === "eligible"
-                      ? "符合门槛，待激活"
-                      : latestAssessment
-                        ? "影子验证中"
-                        : "暂无候选"}
-              </span>
-            </div>
-            {latestAssessment ? (
-              <div className="promotion-summary">
-                <span>
-                  影子样本 <strong>{latestAssessment.metrics?.shadow_trading_days ?? 0}</strong>/60 日
-                </span>
-                <span>
-                  完成交易 <strong>{latestAssessment.metrics?.closed_trades ?? 0}</strong>/20 笔
-                </span>
-                <span>
-                  验收 Sharpe <strong>{numberOrDash(latestAssessment.metrics?.primary_sharpe)}</strong>/3.00
-                </span>
-                <span>
-                  OOS 折数 <strong>{latestAssessment.metrics?.oos_folds ?? 0}</strong>/6
-                </span>
-                <span className={latestAssessment.failures?.length ? "neg" : "pos"}>
-                  {latestAssessment.failures?.length
-                    ? `未通过：${latestAssessment.failures.slice(0, 3).map((failure) => failure.code).join("、")}`
-                    : "全部晋级门槛通过"}
-                </span>
-                {researchStatus?.model_health ? (
-                  <span>
-                    冠军健康：连续跑输 {researchStatus.model_health.consecutive_underperform_days ?? 0}/10 日
-                    · 当前回撤 {pctOrDash(researchStatus.model_health.current_drawdown_pct)}
-                  </span>
-                ) : null}
-                {fiveDayFeedback ? (
-                  <span>
-                    5日奖惩：{fiveDayFeedback.observations ?? 0} 个样本
-                    · 超额命中 {pctOrDash((fiveDayFeedback.hit_rate ?? 0) * 100)}
-                    · 校准误差 {pctOrDash((fiveDayFeedback.mean_absolute_calibration_error ?? 0) * 100)}
-                  </span>
-                ) : null}
-              </div>
-            ) : null}
-            {!shadowModel ? (
-              <p className="muted" style={{ padding: "12px 16px", margin: 0 }}>
-                {championModel
-                  ? `当前交易计划由 ${championModel.model_version} 生成，暂无新的影子挑战模型。`
-                  : "当前买卖、持仓和回测仍全部由 V1 规则生成。研究模型完成训练和影子验证后才会在此显示。"}
-              </p>
+          {/* Common holdings */}
+          <h2 className="subheading">共同持仓</h2>
+          <div className="card" style={{ marginTop: 8 }}>
+            {commonHoldings.length === 0 ? (
+              <p className="muted" style={{ padding: "16px" }}>当前无两策略以上共同持仓</p>
             ) : (
               <div className="table-wrap compact-table">
                 <table>
                   <thead>
                     <tr>
-                      <th>排名</th>
                       <th>代码</th>
                       <th>名称</th>
-                      <th>影子动作</th>
-                      <th className="num">3日超额</th>
-                      <th className="num">下行风险</th>
-                      <th>主要驱动</th>
-                      <th className="num">目标仓位</th>
+                      <th>持有策略</th>
+                      <th className="num">共持数</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {shadowModel.predictions.slice(0, 8).map((prediction) => (
-                      <tr key={`shadow-${prediction.symbol}`}>
-                        <td className="mono">{prediction.rank}</td>
-                        <td className="mono">{prediction.symbol}</td>
-                        <td>{nameMap.get(prediction.symbol) ?? "名称未收录"}</td>
-                        <td>{shadowActionLabel(prediction.action)}</td>
-                        <td className={`num ${(prediction.expectedReturns.d3 ?? 0) >= 0 ? "pos" : "neg"}`}>
-                          {prediction.expectedReturns.d3 == null ? "暂无" : pct(prediction.expectedReturns.d3 * 100)}
-                        </td>
-                        <td className="num neg">{pct(prediction.downsideRisk * 100)}</td>
-                        <td className="mono">
-                          {Object.entries(prediction.featureContributions ?? {})
-                            .slice(0, 2)
-                            .map(([name, value]) => `${name} ${pct(value * 100, 1)}`)
-                            .join(" · ") || "暂无"}
-                        </td>
-                        <td className="num">{pct(prediction.targetWeight * 100, 1)}</td>
+                    {commonHoldings.map((h) => (
+                      <tr key={h.symbol}>
+                        <td className="mono">{h.symbol}</td>
+                        <td>{h.name}</td>
+                        <td>{h.strategies.join(" · ")}</td>
+                        <td className="num">{h.count}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                <div className="muted" style={{ padding: "10px 16px" }}>
-                  数据截止 {shadowModel.data_cutoff} · 特征 {shadowModel.feature_version}
-                  {shadowModel.quality?.warnings.length
-                    ? ` · 警告：${shadowModel.quality.warnings.join("；")}`
-                    : " · 数据质量与漂移检查通过"}
-                </div>
               </div>
             )}
           </div>
 
-          <h2 className="subheading">权益曲线对比</h2>
-          <div className="card chart-card">
-            <EquityChart data={equityData} />
+          {/* Common drawdown periods */}
+          <h2 className="subheading">共同回撤区间</h2>
+          <div className="card" style={{ marginTop: 8 }}>
+            {commonDrawdownDates.length === 0 ? (
+              <p className="muted" style={{ padding: "16px" }}>回测期间无两策略同时回撤超过 5% 的交易日</p>
+            ) : (
+              <>
+                <p className="muted" style={{ padding: "8px 16px", fontSize: 13 }}>
+                  以下交易日有 2 条以上策略同时处于 5% 以上回撤，共 {commonDrawdownDates.length} 日。
+                  最近 20 日：
+                </p>
+                <div className="table-wrap compact-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>日期</th>
+                        {strategyData.map(({ meta }) => (
+                          <th key={meta.id} className="num">{meta.name} 回撤</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {commonDrawdownDates.slice(-20).reverse().map((date) => (
+                        <tr key={date}>
+                          <td className="mono">{date}</td>
+                          {drawdownByStrategy.map(({ meta, drawdowns }) => (
+                            <td key={meta.id} className="num neg">
+                              {numberOrDash(drawdowns.get(date), 1)}%
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
 
-          <h2 className="subheading">主题配置与收益贡献</h2>
-          <div className="card chart-card">
-            <ThemeChart data={themeData} />
+          {/* Strategy summary cards */}
+          <h2 className="subheading">策略概要</h2>
+          <div className="theme-grid" style={{ marginTop: 8 }}>
+            {strategyData.map(({ meta, data }) => {
+              const stats = data?.stats;
+              const holdingsCount = data ? Object.keys(data.latestHoldings).length : 0;
+              const latestEquity = data?.equityCurve.at(-1)?.equity ?? 0;
+              const latestCash = data?.equityCurve.at(-1)?.cash ?? 0;
+              return (
+                <div key={meta.id} className="theme-panel">
+                  <div className="theme-title">
+                    <strong>{meta.name}</strong>
+                    <span className="mono">{meta.codename}</span>
+                  </div>
+                  <p className="muted" style={{ fontSize: 13, margin: "8px 0" }}>{meta.description}</p>
+                  <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13 }}>
+                    <span>总收益 <strong className={stats ? (stats.totalReturnPct >= 0 ? "pos" : "neg") : ""}>{stats ? pct(stats.totalReturnPct) : "暂无"}</strong></span>
+                    <span>夏普 <strong>{stats ? stats.sharpe.toFixed(2) : "暂无"}</strong></span>
+                    <span>持仓 <strong>{holdingsCount} 只</strong></span>
+                    <span>总权益 <strong>{data ? money(latestEquity) : "暂无"}</strong></span>
+                    <span>现金 <strong>{data ? money(latestCash) : "暂无"}</strong></span>
+                  </div>
+                  <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {meta.factors.map((f) => (
+                      <span key={f} className="badge" style={{ fontSize: 11, padding: "2px 8px" }}>{f}</span>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: 12 }}>
+                    <Link href={`/dashboard/${meta.id}`} style={{ fontSize: 14 }}>
+                      进入 {meta.name} 详情 →
+                    </Link>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-
-          <div className="theme-grid dashboard-grid" style={{ marginTop: 16 }}>
-            <div className="theme-panel">
-              <div className="theme-title">
-                <strong>量化模拟仓</strong>
-                <span>
-                  {data.latestDate} · {holdings.length} 只 · 股票 {money(holdingsValue)} · 现金 {money(latestCash)}
-                </span>
-              </div>
-              <div className="table-wrap compact-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>代码</th>
-                      <th>名称</th>
-                      <th>主题</th>
-                      <th className="num">数量</th>
-                      <th className="num">价格</th>
-                      <th className="num">市值</th>
-                      <th className="num">权重</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {holdings.length === 0 && (
-                      <tr><td colSpan={7} className="muted">空仓</td></tr>
-                    )}
-                    {holdings.map(({ sym, pos, value }) => (
-                      <tr key={sym}>
-                        <td className="mono">{sym}</td>
-                        <td>{nameMap.get(sym) ?? "名称未收录"}</td>
-                        <td>{themeMap.get(sym) ?? "主题未收录"}</td>
-                        <td className="num">{Math.round(pos.shares).toLocaleString("en-US")}</td>
-                        <td className="num">{pos.price.toFixed(2)}</td>
-                        <td className="num">{money(value)}</td>
-                        <td className="num">{((value / (latestEquity || 1)) * 100).toFixed(1)}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div className="theme-panel">
-              <div className="theme-title">
-                <strong>明日目标信号</strong>
-                <span>{data.latestPlan?.decisionDate ?? data.latestDate} 收盘信号 · 现金 {((cashWeight || 0) * 100).toFixed(1)}%</span>
-              </div>
-              <div className="table-wrap compact-table">
-                <table className="plan-table">
-                  <thead>
-                    <tr>
-                      <th>代码</th>
-                      <th>名称</th>
-                      <th>方向</th>
-                      <th className="num">仓位</th>
-                      <th>原因</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {plannedOrders.length === 0 && (
-                      <tr><td colSpan={5} className="muted">暂无待执行换仓</td></tr>
-                    )}
-                    {plannedOrders.map((order) => (
-                      <tr key={`${order.side}-${order.symbol}`}>
-                        <td className="mono">{order.symbol}</td>
-                        <td>{nameMap.get(order.symbol) ?? "名称未收录"}</td>
-                        <td><span className={`badge ${order.side}`}>{order.label}</span></td>
-                        <td className="num">{(order.targetWeight * 100).toFixed(1)}%</td>
-                        <td className="muted signal-reason">{order.reason}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div className="theme-panel recent-trades-panel">
-              <div className="theme-title"><strong>最近交易</strong><span>近 10 / 共 {data.trades.length} 笔</span></div>
-              <div className="table-wrap compact-table">
-                <table className="recent-table">
-                  <thead>
-                    <tr><th>决策日</th><th>成交日</th><th>代码</th><th>方向</th><th className="num">数量</th><th className="num">价格</th></tr>
-                  </thead>
-                  <tbody>
-                    {data.trades.slice(-10).reverse().map((t, i) => (
-                      <tr key={i}>
-                        <td>{t.decisionDate ?? t.date}</td>
-                        <td>{t.tradeDate ?? t.date}</td>
-                        <td className="mono">{t.symbol}</td>
-                        <td><span className={`badge ${t.side}`}>{sideLabel(t.side)}</span></td>
-                        <td className="num">{t.shares}</td>
-                        <td className="num">{t.price.toFixed(2)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div className="theme-panel signal-summary-panel">
-              <div className="theme-title">
-                <strong>近期信号表现</strong>
-                <span>{history.length} 个交易日 · 最新现价</span>
-              </div>
-              <div className="table-wrap compact-table">
-                <table className="signal-summary-table">
-                  <thead>
-                    <tr>
-                      <th>信号日</th>
-                      <th>名称</th>
-                      <th className="num">信号价</th>
-                      <th className="num">现价</th>
-                      <th className="num">涨跌</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {buySignalHistory.length === 0 && (
-                      <tr><td colSpan={5} className="muted">暂无历史信号归档</td></tr>
-                    )}
-                    {buySignalHistory.slice(0, 10).map((signal) => (
-                      <tr key={`summary-${signal.signalDate}-${signal.symbol}`}>
-                        <td className="mono">{signal.signalDate}</td>
-                        <td>{signal.name ?? nameMap.get(signal.symbol) ?? signal.symbol}</td>
-                        <td className="num">{numberOrDash(signal.signalPrice)}</td>
-                        <td className="num">{numberOrDash(signal.currentPrice)}</td>
-                        <td className={`num ${signal.changePct == null ? "muted" : signal.changePct >= 0 ? "pos" : "neg"}`}>
-                          {pctOrDash(signal.changePct)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-
-          <h2 className="subheading">完整历史买入信号表现</h2>
-          <BuySignalHistoryTable
-            rows={buySignalHistory}
-            archiveDates={history.map((snapshot) => snapshot.signal_date)}
-          />
         </>
       )}
-    </div>
-  );
-}
-
-function Kpi({ label, value, pos }: { label: string; value: string; pos?: boolean }) {
-  return (
-    <div className="kpi">
-      <span className="label">{label}</span>
-      <span className={`value ${pos === undefined ? "" : pos ? "pos" : "neg"}`}>{value}</span>
     </div>
   );
 }
