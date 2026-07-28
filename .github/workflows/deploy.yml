@@ -1,11 +1,12 @@
 name: deploy
 
 on:
-  push:
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
-# Only deploy after CI passes.
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
@@ -14,12 +15,13 @@ jobs:
   deploy:
     name: Deploy to production
     runs-on: ubuntu-latest
-    # Wait for CI to pass on the same commit.
-    needs: []
-    if: github.ref == 'refs/heads/main'
+    # Only deploy when CI passed (or manual dispatch).
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@7eaf66e414980190e4b8a2e0c5a14c1a5b8b3b8f  # v1.2.0
         env:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/opt/ashare-pilot' }}
         with:
@@ -40,8 +42,18 @@ jobs:
             docker compose build --pull
             docker compose up -d --remove-orphans
 
-            echo "[deploy] Waiting for health check..."
-            sleep 10
-            docker compose ps
+            echo "[deploy] Health check..."
+            for i in $(seq 1 12); do
+              if curl -fsS "http://127.0.0.1:3100/api/strategies" > /dev/null 2>&1; then
+                echo "[deploy] Health check passed."
+                break
+              fi
+              if [ "$i" = 12 ]; then
+                echo "[deploy] Health check FAILED after 60s."
+                docker compose ps
+                exit 1
+              fi
+              sleep 5
+            done
 
             echo "[deploy] Done at $(date '+%Y-%m-%d %H:%M:%S %Z')"

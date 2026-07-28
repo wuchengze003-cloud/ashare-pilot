@@ -11,8 +11,8 @@
 //   - Volatile: high realized vol relative to history, defensive posture
 //
 // Factor Rotation:
-//   - Trending → emphasize momentum (60%), reduce mean-reversion (10%)
-//   - Ranging  → emphasize mean-reversion (45%), reduce momentum (20%)
+//   - Trending → emphasize momentum (45%), reduce mean-reversion (10%)
+//   - Ranging  → emphasize mean-reversion (35%), reduce momentum (20%)
 //   - Volatile → emphasize quality/defense (40%), reduce all offense
 //
 // Additional innovations:

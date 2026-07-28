@@ -726,7 +726,6 @@ function computeRoundTripEpisodes(
     totalCost: number; // shares * price * (1 + buyFee)
     exitShares: number;
     exitProceeds: number; // shares * price * (1 - sellFee)
-    bars: number;
   }>();
 
   for (const t of trades) {
@@ -742,7 +741,6 @@ function computeRoundTripEpisodes(
           totalCost: t.shares * t.price * (1 + buyFee),
           exitShares: 0,
           exitProceeds: 0,
-          bars: 0,
         });
       }
     } else {
@@ -751,11 +749,13 @@ function computeRoundTripEpisodes(
       if (!ep) continue;
       ep.exitShares += t.shares;
       ep.exitProceeds += t.shares * t.price * (1 - sellFee);
-      ep.bars = Math.max(ep.bars, 0);
       if (ep.exitShares >= ep.totalShares) {
         // Position fully closed — record episode
         const avgEntry = ep.totalCost / ep.totalShares;
         const avgExit = ep.exitProceeds / ep.exitShares;
+        const bars = Math.max(1, Math.round(
+          (new Date(t.tradeDate).getTime() - new Date(ep.entryDate).getTime()) / 86_400_000,
+        ));
         episodes.push({
           symbol: t.symbol,
           entryDate: ep.entryDate,
@@ -764,7 +764,7 @@ function computeRoundTripEpisodes(
           avgEntryPrice: avgEntry / (1 + buyFee), // raw price
           avgExitPrice: avgExit / (1 - sellFee),   // raw price
           pnlPct: (ep.exitProceeds / ep.totalCost - 1) * 100,
-          bars: ep.bars,
+          bars,
         });
         open.delete(t.symbol);
       }
