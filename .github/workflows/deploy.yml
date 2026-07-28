@@ -57,7 +57,10 @@ jobs:
             if [ -n "$OLD_RUNTIME" ]; then
               mkdir -p "$RELEASE_DIR/web/data/runtime"
               cp -a "$OLD_RUNTIME/." "$RELEASE_DIR/web/data/runtime/"
+              chown -R a-share:a-share "$RELEASE_DIR/web/data" 2>/dev/null || true
               echo "[deploy] Copied runtime data from $OLD_RUNTIME"
+              echo "[deploy] Runtime dir contents:"
+              ls -la "$RELEASE_DIR/web/data/runtime/" 2>/dev/null || echo "(empty or missing)"
             else
               echo "[deploy] No previous runtime data found (first deploy)."
             fi
