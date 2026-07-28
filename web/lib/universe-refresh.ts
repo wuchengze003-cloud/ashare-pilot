@@ -1,7 +1,7 @@
 // DeepSeek-driven backend universe refresh.
 //
 // Asks the model to act as a sector curator: given the current watchlist
-// and the 硅基文明消费 thesis plus optional research inputs, propose
+// and the AI基建产业链 thesis plus optional research inputs, propose
 // ADDS / REMOVES / RECLASSIFIES. This is intentionally a backend workflow:
 // the public frontend displays the latest approved 94-stock snapshot and does
 // not expose a button that mutates the universe.
@@ -35,9 +35,9 @@ export interface RefreshContext {
   sourceLabels?: string[];
 }
 
-const CURATOR_SYSTEM = `你是中国 A 股的硅基文明消费股研究员。
+const CURATOR_SYSTEM = `你是中国 A 股的 AI 基建产业链研究员。
 
-主题：硅基文明（AI 算力体）自身为了存在与扩张需要"消费"的东西 ——
+主题：AI 算力基础设施（AI 基建）产业链 ——
 算力芯片、光模块/高速互连、AI 服务器、液冷散热、功率器件（IGBT/SiC/MOSFET + MLCC/电感/薄膜电容等电源链被动元件）、
 电力设备（变压器/HVDC/UPS/服务器电源/开关柜等 AIDC 供电设备）、
 电力(绿电+核电)、IDC、HBM/存储、半导体设备与材料、高速 PCB/CCL、晶圆代工、云。

@@ -23,12 +23,14 @@ jobs:
         uses: appleboy/ssh-action@v1.2.0
         env:
           DEPLOY_ROOT: ${{ secrets.DEPLOY_PATH || '/opt/a-share-assistant-web' }}
+          # P1-3: Lock deploy to the exact CI commit SHA
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
-          envs: DEPLOY_ROOT
+          envs: DEPLOY_ROOT,DEPLOY_SHA
           script: |
             set -euo pipefail
 
@@ -40,30 +42,26 @@ jobs:
             RELEASE_DIR="$DEPLOY_ROOT/releases/$RELEASE_ID"
             CURRENT="$DEPLOY_ROOT/current"
 
+            # P1-4: Runtime data lives in a shared persistent directory
+            RUNTIME_DIR="/var/lib/a-share-assistant/runtime"
+
+            echo "[deploy] Deploy SHA: $DEPLOY_SHA"
             echo "[deploy] Creating release $RELEASE_ID..."
             install -d -m 0755 "$DEPLOY_ROOT/releases" "$RELEASE_DIR"
 
-            echo "[deploy] Cloning repo..."
-            git clone --depth 1 --branch main "$REPO_URL" "$RELEASE_DIR"
+            echo "[deploy] Cloning repo and checking out exact SHA..."
+            git clone --no-checkout "$REPO_URL" "$RELEASE_DIR"
+            cd "$RELEASE_DIR"
+            git fetch origin "$DEPLOY_SHA"
+            git checkout --detach "$DEPLOY_SHA"
+            echo "[deploy] Checked out: $(git rev-parse HEAD)"
 
-            echo "[deploy] Preserving runtime data from previous release..."
-            OLD_RUNTIME=""
-            if [ -d "$CURRENT/web/data/runtime" ]; then
-              OLD_RUNTIME="$CURRENT/web/data/runtime"
-            else
-              # Search all releases for runtime data
-              OLD_RUNTIME=$(find "$DEPLOY_ROOT/releases" -maxdepth 3 -path "*/web/data/runtime" -type d 2>/dev/null | head -1)
-            fi
-            if [ -n "$OLD_RUNTIME" ]; then
-              mkdir -p "$RELEASE_DIR/web/data/runtime"
-              cp -a "$OLD_RUNTIME/." "$RELEASE_DIR/web/data/runtime/"
-              chown -R a-share:a-share "$RELEASE_DIR/web/data" 2>/dev/null || true
-              echo "[deploy] Copied runtime data from $OLD_RUNTIME"
-              echo "[deploy] Runtime dir contents:"
-              ls -la "$RELEASE_DIR/web/data/runtime/" 2>/dev/null || echo "(empty or missing)"
-            else
-              echo "[deploy] No previous runtime data found (first deploy)."
-            fi
+            # P1-4: Ensure shared runtime directory exists (don't copy from old release)
+            echo "[deploy] Ensuring runtime directory $RUNTIME_DIR..."
+            install -d -o a-share -g a-share -m 0750 "$RUNTIME_DIR"
+            # Symlink web/data/runtime → shared runtime dir so the app finds it
+            rm -rf "$RELEASE_DIR/web/data/runtime"
+            ln -sfn "$RUNTIME_DIR" "$RELEASE_DIR/web/data/runtime"
 
             echo "[deploy] Building web..."
             cd "$RELEASE_DIR/web"
@@ -73,30 +71,66 @@ jobs:
             NODE_OPTIONS=--max-old-space-size=768 NEXT_BASE_PATH="$BASE_PATH" npm run build
             install -d -o a-share -g a-share -m 0750 .cache .next/cache 2>/dev/null || true
 
+            # P1-3: Record previous symlink for rollback
+            PREV_SYMLINK=""
+            if [ -L "$CURRENT" ]; then
+              PREV_SYMLINK=$(readlink -f "$CURRENT")
+              echo "[deploy] Previous release: $PREV_SYMLINK"
+            fi
+
             echo "[deploy] Switching symlink..."
             ln -sfn "$RELEASE_DIR" "$CURRENT.new"
             mv -Tf "$CURRENT.new" "$CURRENT"
 
             echo "[deploy] Restarting $SERVICE..."
             systemctl restart "$SERVICE"
-            systemctl is-active "$SERVICE"
 
             echo "[deploy] Health check..."
+            DEPLOY_OK=false
             for i in $(seq 1 30); do
               if curl -fsS "http://127.0.0.1:3101$BASE_PATH" > /dev/null 2>&1; then
                 echo "[deploy] Health check passed."
+                DEPLOY_OK=true
                 break
               fi
               if [ "$i" = 30 ]; then
                 echo "[deploy] Health check FAILED after 30s."
-                systemctl status "$SERVICE" || true
-                exit 1
               fi
               sleep 1
             done
+
+            # P1-3: Auto-rollback on health check failure
+            if [ "$DEPLOY_OK" = false ]; then
+              echo "[deploy] ROLLBACK: Health check failed."
+              systemctl status "$SERVICE" || true
+              if [ -n "$PREV_SYMLINK" ]; then
+                echo "[deploy] Rolling back to $PREV_SYMLINK..."
+                ln -sfn "$PREV_SYMLINK" "$CURRENT.new"
+                mv -Tf "$CURRENT.new" "$CURRENT"
+                systemctl restart "$SERVICE"
+                sleep 3
+                if curl -fsS "http://127.0.0.1:3101$BASE_PATH" > /dev/null 2>&1; then
+                  echo "[deploy] Rollback successful. Previous version is live."
+                else
+                  echo "[deploy] Rollback also failed! Manual intervention required."
+                fi
+              else
+                echo "[deploy] No previous release to roll back to."
+              fi
+              exit 1
+            fi
+
+            # Install daily-close systemd timer (Hermes automation)
+            echo "[deploy] Installing daily-close timer..."
+            cp "$RELEASE_DIR/ops/analytics/a-share-daily-close.service" /etc/systemd/system/
+            cp "$RELEASE_DIR/ops/analytics/a-share-daily-close.timer" /etc/systemd/system/
+            systemctl daemon-reload
+            systemctl enable --now a-share-daily-close.timer
+            echo "[deploy] Daily-close timer enabled."
 
             echo "[deploy] Cleaning old releases (keep latest 3)..."
             find "$DEPLOY_ROOT/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \
               | sort -rn | tail -n +4 | cut -d' ' -f2- | xargs -r rm -rf
 
             echo "[deploy] Done at $(date '+%Y-%m-%d %H:%M:%S %Z')"
+            echo "[deploy] Live SHA: $DEPLOY_SHA"

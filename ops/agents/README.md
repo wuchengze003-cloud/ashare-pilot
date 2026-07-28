@@ -14,7 +14,7 @@ promote a model, edit the production universe, or deploy the application.
 Every manifest declares an input-data cutoff, expected outputs, allowed and
 forbidden paths, tests, and a maximum subagent count. Read-only jobs fingerprint
 both Git-visible files and protected ignored runtime paths. Coding jobs remain
-in their worktree until Codex reviews the diff and test evidence.
+in their worktree until Hermes reviews the diff and test evidence.
 They refuse to start when their allowed paths contain uncommitted changes,
 because an isolated worktree starts from `HEAD` and must not silently miss
 uncommitted V2 code. Unrelated personal files do not block a research job.

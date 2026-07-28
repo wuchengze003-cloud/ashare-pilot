@@ -1,0 +1,15 @@
+[Unit]
+Description=Run A Share daily-close at 15:30 Asia/Shanghai on weekdays
+
+[Timer]
+# 15:30 CST (Asia/Shanghai) = 07:30 UTC
+# Run Monday through Friday to cover trading days.
+# The daily-close script itself handles holidays by checking
+# if the latest market data matches the expected date and
+# refusing to deploy stale data.
+OnCalendar=Mon..Fri 07:30:00
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

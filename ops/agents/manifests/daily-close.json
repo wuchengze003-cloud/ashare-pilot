@@ -1,0 +1,16 @@
+{
+  "id": "daily-close",
+  "agent": "hermes",
+  "mode": "read_only",
+  "prompt": "This is the reference manifest for the daily-close pipeline. The active execution manifest is hermes-daily-close.json. This manifest exists for backward compatibility with dispatch systems that reference the daily-close id. Execute the same pipeline: run `cd web && npm run daily:close` which refreshes market data, runs all three strategies, generates manifest.json, validates, builds, and deploys. Report PASS or FAIL with health status and strategy metrics.",
+  "allowed_paths": ["web/data/runtime", "web/.cache", "pyserver/cache.db"],
+  "forbidden_paths": ["web/data/universe.json", "web/lib", "web/scripts", "web/app", "pyserver/main.py", "research/ashare_research", "config", ".github"],
+  "input_data_cutoff": "latest_complete_trading_date",
+  "expected_outputs": ["stdout PASS_OR_FAIL with health status"],
+  "required_verdict": "PASS",
+  "max_subagents": 0,
+  "timeout_seconds": 1800,
+  "tests": [
+    "test -f web/data/runtime/daily-close-health.json"
+  ]
+}

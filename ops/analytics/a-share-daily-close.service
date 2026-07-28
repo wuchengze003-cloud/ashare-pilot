@@ -1,0 +1,33 @@
+[Unit]
+Description=A Share Assistant daily-close pipeline (Hermes)
+After=network-online.target a-share-assistant.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=a-share
+Group=a-share
+WorkingDirectory=/opt/a-share-assistant-web/current
+EnvironmentFile=/etc/a-share-assistant/a-share.env
+Environment=RUNTIME_DATA_DIR=/var/lib/a-share-assistant/runtime
+Environment=HOME=/home/a-share
+ExecStart=/usr/bin/python3 ops/agents/dispatch.py ops/agents/manifests/hermes-daily-close.json
+TimeoutStartSec=1800
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/a-share-assistant/runtime /opt/a-share-assistant-web/current/web/.cache /opt/a-share-assistant-web/current/ops/agents/runtime
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryHigh=1G
+MemoryMax=2G
+TasksMax=512

@@ -1,5 +1,5 @@
 {
-  "$schema_note": "硅基文明消费股分层股票池。pool_tier标识当前正式/观察层；strategy_from/strategy_until控制点时策略生效区间；previous_theme保留历史分类。注意：strategy_from=2026-01-01表示原始论点股票（回测起点前已可识别为AI基建标的），2026-07-02及之后入池的股票为扩展研究后新增。本池存在一定幸存者偏差：仅包含至2026-07仍被认为有效的标的，历史中曾入池后被移除的标的通过strategy_until保留。",
+  "$schema_note": "A股量化策略站分层股票池。pool_tier标识当前正式/观察层；strategy_from/strategy_until控制点时策略生效区间；previous_theme保留历史分类。注意：strategy_from=2026-01-01表示原始论点股票（回测起点前已可识别为AI基建标的），2026-07-02及之后入池的股票为扩展研究后新增。本池存在一定幸存者偏差：仅包含至2026-07仍被认为有效的标的，历史中曾入池后被移除的标的通过strategy_until保留。",
   "updated_at": "2026-07-27",
   "updated_by": "point-in-time-fix",
   "entries": [

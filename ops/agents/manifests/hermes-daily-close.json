@@ -1,0 +1,17 @@
+{
+  "id": "hermes-daily-close",
+  "agent": "hermes",
+  "mode": "read_only",
+  "prompt": "Execute the end-of-day daily-close pipeline for the A-share investment assistant. Steps: 1) Ensure pyserver is running (it auto-starts if not). 2) Run `cd web && npm run daily:close` which refreshes market data caches, runs all three strategies (momentum-v1, tide, prism), generates manifest.json with git SHA binding, validates runtime consistency, runs tests, builds, and deploys to the production server. 3) After the pipeline finishes, read web/data/runtime/daily-close-health.json and report the status, steps, and any errors. 4) Read web/data/runtime/strategies/*/backtest.json and report each strategy's total return, sharpe, and latest signal date. 5) Read web/data/runtime/manifest.json and report the commit SHA, data date, and universe SHA. Do NOT edit any source files. Do NOT modify universe.json. The pipeline writes only to gitignored runtime directories. The first non-empty output line must be exactly PASS or FAIL, followed by evidence including the health status, strategy metrics, and manifest SHA binding.",
+  "allowed_paths": ["web/data/runtime", "web/.cache", "pyserver/cache.db"],
+  "forbidden_paths": ["web/data/universe.json", "web/lib", "web/scripts", "web/app", "pyserver/main.py", "research/ashare_research", "config", ".github"],
+  "input_data_cutoff": "latest_complete_trading_date",
+  "expected_outputs": ["stdout PASS_OR_FAIL with health status, strategy metrics, manifest SHA"],
+  "required_verdict": "PASS",
+  "max_subagents": 0,
+  "timeout_seconds": 1800,
+  "tests": [
+    "test -f web/data/runtime/daily-close-health.json",
+    "python3 -c \"import json; h=json.load(open('web/data/runtime/daily-close-health.json')); assert h['status'] in ('passed','stale-or-no-session'), f'unexpected status: {h[\\\"status\\\"]}'\""
+  ]
+}
