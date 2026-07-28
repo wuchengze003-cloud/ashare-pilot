@@ -15,7 +15,6 @@ jobs:
   deploy:
     name: Deploy to production
     runs-on: ubuntu-latest
-    # Only deploy when CI passed (or manual dispatch).
     if: >-
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
       github.event_name == 'workflow_dispatch'
@@ -23,44 +22,62 @@ jobs:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
         env:
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/opt/ashare-pilot' }}
+          DEPLOY_ROOT: ${{ secrets.DEPLOY_PATH || '/opt/a-share-assistant-web' }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
-          envs: DEPLOY_PATH
+          envs: DEPLOY_ROOT
           script: |
             set -euo pipefail
 
-            if [ ! -d "$DEPLOY_PATH/.git" ]; then
-              echo "[deploy] First-time setup: cloning repo to $DEPLOY_PATH..."
-              mkdir -p "$(dirname "$DEPLOY_PATH")"
-              git clone https://github.com/wuchengze003-cloud/ashare-pilot.git "$DEPLOY_PATH"
-            fi
+            SERVICE="a-share-assistant.service"
+            ENV_FILE="/etc/a-share-assistant/a-share.env"
+            BASE_PATH="/a-share"
+            REPO_URL="https://github.com/wuchengze003-cloud/ashare-pilot.git"
+            RELEASE_ID=$(date +%Y%m%d%H%M%S)
+            RELEASE_DIR="$DEPLOY_ROOT/releases/$RELEASE_ID"
+            CURRENT="$DEPLOY_ROOT/current"
 
-            cd "$DEPLOY_PATH"
+            echo "[deploy] Creating release $RELEASE_ID..."
+            install -d -m 0755 "$DEPLOY_ROOT/releases" "$RELEASE_DIR"
 
-            echo "[deploy] Pulling latest main..."
-            git fetch origin main
-            git reset --hard origin/main
+            echo "[deploy] Cloning repo..."
+            git clone --depth 1 --branch main "$REPO_URL" "$RELEASE_DIR"
 
-            echo "[deploy] Rebuilding containers..."
-            docker compose build --pull
-            docker compose up -d --remove-orphans
+            echo "[deploy] Building web..."
+            cd "$RELEASE_DIR/web"
+            test -r "$ENV_FILE" || { echo "[deploy] ERROR: $ENV_FILE not found"; exit 1; }
+            set -a && . "$ENV_FILE" && set +a
+            npm ci
+            NODE_OPTIONS=--max-old-space-size=768 NEXT_BASE_PATH="$BASE_PATH" npm run build
+            install -d -o a-share -g a-share -m 0750 .cache .next/cache 2>/dev/null || true
+
+            echo "[deploy] Switching symlink..."
+            ln -sfn "$RELEASE_DIR" "$CURRENT.new"
+            mv -Tf "$CURRENT.new" "$CURRENT"
+
+            echo "[deploy] Restarting $SERVICE..."
+            systemctl restart "$SERVICE"
+            systemctl is-active "$SERVICE"
 
             echo "[deploy] Health check..."
-            for i in $(seq 1 12); do
-              if curl -fsS "http://127.0.0.1:3100/api/strategies" > /dev/null 2>&1; then
+            for i in $(seq 1 30); do
+              if curl -fsS "http://127.0.0.1:3101$BASE_PATH" > /dev/null 2>&1; then
                 echo "[deploy] Health check passed."
                 break
               fi
-              if [ "$i" = 12 ]; then
-                echo "[deploy] Health check FAILED after 60s."
-                docker compose ps
+              if [ "$i" = 30 ]; then
+                echo "[deploy] Health check FAILED after 30s."
+                systemctl status "$SERVICE" || true
                 exit 1
               fi
-              sleep 5
+              sleep 1
             done
+
+            echo "[deploy] Cleaning old releases (keep latest 3)..."
+            find "$DEPLOY_ROOT/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \
+              | sort -rn | tail -n +4 | cut -d' ' -f2- | xargs -r rm -rf
 
             echo "[deploy] Done at $(date '+%Y-%m-%d %H:%M:%S %Z')"
