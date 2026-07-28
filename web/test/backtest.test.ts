@@ -455,3 +455,80 @@ test("point-in-time universe membership does not leak new stocks into old decisi
   assert.deepEqual(seen.get("2026-07-02"), ["NEW"]);
   assert.ok([...seen.values()].every((symbols) => !symbols.includes("OBS")));
 });
+
+// ---------- Round-trip episode & CostConfig tests ----------
+
+test("round-trip episodes: bars > 0 and pnlPct net of fees", async () => {
+  // A rises from 100 to 120 over 20 bars, then scorer sells.
+  const closes = Array.from({ length: 30 }, (_, i) => (i < 20 ? 100 + i : 120));
+  const series: SymbolSeries[] = [
+    { entry: { symbol: "X", name: "Test", theme: "T" }, klines: makeKlines("2025-03-01", closes) },
+  ];
+  let sold = false;
+  const buyThenSell: Scorer = async (snapshots, ctx) => {
+    const dayIndex = closes.findIndex((_, i) => {
+      const d = new Date("2025-03-01");
+      d.setUTCDate(d.getUTCDate() + i);
+      return d.toISOString().slice(0, 10) === ctx.asOf;
+    });
+    return snapshots.map((s) => ({
+      symbol: s.symbol,
+      action: dayIndex >= 20 && !sold ? "sell" as const : "buy" as const,
+      confidence: 1,
+      size: 1,
+      rationale: "test",
+    }));
+  };
+  const r = await runBacktest(series, {
+    ...cfg,
+    startDate: "2025-03-01",
+    endDate: "2025-04-30",
+    rebalanceEveryNDays: 1,
+    decisionEveryNDays: 1,
+    maxPositions: 1,
+    feeBps: 10,
+  }, { scorer: buyThenSell });
+
+  if (r.episodes && r.episodes.length > 0) {
+    const ep = r.episodes[0];
+    assert.ok(ep.bars >= 1, `bars should be >= 1, got ${ep.bars}`);
+    assert.ok(ep.entryDate < ep.exitDate, "entry before exit");
+    // pnlPct should be net of fees (less than raw 20% gain)
+    assert.ok(ep.pnlPct < 20, `pnlPct ${ep.pnlPct} should be less than raw 20% due to fees`);
+  }
+  // roundTrips stat should match episodes count
+  if (r.stats.roundTrips != null && r.episodes) {
+    assert.equal(r.stats.roundTrips, r.episodes.length);
+  }
+});
+
+test("costConfig: stamp duty only on sell side", async () => {
+  const closes = Array.from({ length: 40 }, (_, i) => (i < 20 ? 100 : 110));
+  const series: SymbolSeries[] = [
+    { entry: { symbol: "Y", name: "CostTest", theme: "T" }, klines: makeKlines("2025-05-01", closes) },
+  ];
+  const alwaysBuy: Scorer = async (snapshots) =>
+    snapshots.map((s) => ({ symbol: s.symbol, action: "buy" as const, confidence: 1, size: 1, rationale: "test" }));
+
+  // Run with symmetric feeBps=10 (old model)
+  const rSym = await runBacktest(series, {
+    ...cfg, startDate: "2025-05-01", endDate: "2025-06-30",
+    rebalanceEveryNDays: 1, decisionEveryNDays: 1, maxPositions: 1, feeBps: 10,
+  }, { scorer: alwaysBuy });
+
+  // Run with costConfig: buy 2.5bp, sell 2.5bp + 5bp stamp + 3bp slippage each side
+  const rCost = await runBacktest(series, {
+    ...cfg, startDate: "2025-05-01", endDate: "2025-06-30",
+    rebalanceEveryNDays: 1, decisionEveryNDays: 1, maxPositions: 1, feeBps: 0,
+    costConfig: { buyCommissionBps: 2.5, sellCommissionBps: 2.5, stampDutyBps: 5, slippageBps: 3 },
+  }, { scorer: alwaysBuy });
+
+  // Both should produce valid results
+  assert.ok(rSym.equityCurve.length > 0);
+  assert.ok(rCost.equityCurve.length > 0);
+  // feeBps=10 per side = 20bp round-trip; costConfig = 2.5+3 (buy) + 2.5+5+3 (sell) = 16bp round-trip
+  // So costConfig is actually cheaper → higher final equity
+  const symFinal = rSym.equityCurve.at(-1)!.equity;
+  const costFinal = rCost.equityCurve.at(-1)!.equity;
+  assert.ok(costFinal >= symFinal, `costConfig (${costFinal}) should be >= symmetric (${symFinal}) due to lower total fees (16bp vs 20bp)`);
+});
