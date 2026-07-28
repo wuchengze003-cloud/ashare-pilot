@@ -154,3 +154,101 @@ export function fetchSpots(symbols: string[]) {
   if (uniq.length === 0) return Promise.resolve([] as Spot[]);
   return get<Spot[]>("/spots", { symbols: uniq.join(",") });
 }
+
+// ---------- Moneyflow (Tide strategy) ----------------------------------------
+
+export interface MoneyflowRow {
+  trade_date: string;
+  buy_lg_amount: number | null;
+  sell_lg_amount: number | null;
+  buy_elg_amount: number | null;
+  sell_elg_amount: number | null;
+  net_mf_amount: number | null;
+}
+
+export interface MoneyflowResponse {
+  symbol: string;
+  rows: MoneyflowRow[];
+}
+
+export function fetchMoneyflow(symbol: string, days = 20) {
+  return get<MoneyflowResponse>("/moneyflow", { symbol, days: String(days) });
+}
+
+// ---------- Index Daily (Prism strategy) -------------------------------------
+
+export interface IndexDailyRow {
+  trade_date: string;
+  open: number | null;
+  close: number | null;
+  high: number | null;
+  low: number | null;
+  pct_chg: number | null;
+  vol: number | null;
+}
+
+export interface IndexDailyResponse {
+  index_code: string;
+  index_name: string;
+  rows: IndexDailyRow[];
+}
+
+export function fetchIndexDaily(index: string, days = 60) {
+  return get<IndexDailyResponse>("/index-daily", { index, days: String(days) });
+}
+
+// ---------- Market Breadth (Prism strategy) ----------------------------------
+
+export interface MarketBreadth {
+  trade_date: string;
+  advance_count: number;
+  decline_count: number;
+  flat_count: number;
+  advance_ratio: number;
+  new_high_20: number;
+  new_low_20: number;
+  total_amount: number | null;
+  limit_up_count: number;
+  limit_down_count: number;
+}
+
+export function fetchMarketBreadth() {
+  return get<MarketBreadth>("/market-breadth", {});
+}
+
+// ---------- Margin Detail (Tide strategy — 融资余额变化) ----------------------
+
+export interface MarginRow {
+  trade_date: string;
+  rzye: number | null;   // 融资余额(元)
+  rqye: number | null;   // 融券余额(元)
+  rzmre: number | null;  // 融资买入额(元)
+  rqchl: number | null;  // 融券偿还量(股)
+}
+
+export interface MarginResponse {
+  symbol: string;
+  rows: MarginRow[];
+}
+
+export function fetchMarginDetail(symbol: string, days = 20) {
+  return get<MarginResponse>("/margin-detail", { symbol, days: String(days) });
+}
+
+// ---------- Index Weight (Prism strategy — 行业扩散度) ------------------------
+
+export interface IndexWeightRow {
+  ts_code: string;
+  trade_date: string;
+  weight: number | null;
+}
+
+export interface IndexWeightResponse {
+  index_code: string;
+  trade_date: string;
+  rows: IndexWeightRow[];
+}
+
+export function fetchIndexWeight(index = "hs300") {
+  return get<IndexWeightResponse>("/index-weight", { index });
+}

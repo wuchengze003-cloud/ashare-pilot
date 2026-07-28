@@ -85,7 +85,7 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 with sqlite3.connect(DB_PATH) as _bootstrap_conn:
     _bootstrap_conn.execute("PRAGMA journal_mode=WAL")
 
-app = FastAPI(title="silicon-civ pyserver", version="0.2.0")
+app = FastAPI(title="a-share-assistant pyserver", version="0.3.0")
 
 
 @app.middleware("http")
@@ -1723,4 +1723,249 @@ def margin_detail(
     ]
     result = MarginResponse(symbol=symbol, rows=rows)
     cache_put(cache_key, result.model_dump(), 3600)
+    return result
+
+
+# ---------- index-daily endpoint (Prism regime detection) --------------------
+
+INDEX_CODES = {
+    "hs300": "000300.SH",   # 沪深300
+    "zz1000": "000852.SH",  # 中证1000
+    "cyb": "399006.SZ",     # 创业板指
+    "sz50": "000016.SH",    # 上证50
+}
+
+
+class IndexDailyRow(BaseModel):
+    trade_date: str
+    open: float | None = None
+    close: float | None = None
+    high: float | None = None
+    low: float | None = None
+    pct_chg: float | None = None   # daily % change
+    vol: float | None = None       # volume (手)
+
+
+class IndexDailyResponse(BaseModel):
+    index_code: str
+    index_name: str
+    rows: list[IndexDailyRow]
+
+
+@app.get("/index-daily", response_model=IndexDailyResponse)
+def index_daily(
+    index: str = Query("hs300", description="hs300 / zz1000 / cyb / sz50"),
+    days: int = Query(60, ge=1, le=250, description="lookback trading days"),
+):
+    """Index daily klines from Tushare index_daily API.
+
+    Used by the Prism strategy for market regime detection.
+    """
+    ts_code = INDEX_CODES.get(index, "000300.SH")
+    cache_key = f"index_daily:{ts_code}:{days}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    end = date.today().strftime("%Y%m%d")
+    start = (date.today() - timedelta(days=days * 2 + 10)).strftime("%Y%m%d")
+    try:
+        df = _with_retries(
+            _pro.index_daily,
+            ts_code=ts_code,
+            start_date=start,
+            end_date=end,
+        )
+    except Exception as e:
+        logger.warning("index_daily failed ts_code=%s: %s", ts_code, e)
+        raise HTTPException(status_code=502, detail=f"index_daily upstream error: {e}")
+
+    if df is None or df.empty:
+        return IndexDailyResponse(index_code=ts_code, index_name=index, rows=[])
+
+    df = df.sort_values("trade_date").tail(days)
+    rows = [
+        IndexDailyRow(
+            trade_date=str(r["trade_date"]),
+            open=_safe_float(r.get("open")),
+            close=_safe_float(r.get("close")),
+            high=_safe_float(r.get("high")),
+            low=_safe_float(r.get("low")),
+            pct_chg=_safe_float(r.get("pct_chg")),
+            vol=_safe_float(r.get("vol")),
+        )
+        for _, r in df.iterrows()
+    ]
+    result = IndexDailyResponse(index_code=ts_code, index_name=index, rows=rows)
+    cache_put(cache_key, result.model_dump(), 3600)
+    return result
+
+
+# ---------- market-breadth endpoint (Prism regime detection) -----------------
+
+class MarketBreadthResponse(BaseModel):
+    trade_date: str
+    advance_count: int          # 上涨家数
+    decline_count: int          # 下跌家数
+    flat_count: int             # 平盘家数
+    advance_ratio: float        # 上涨比例
+    new_high_20: int            # 20日新高家数
+    new_low_20: int             # 20日新低家数
+    total_amount: float | None  # 全市场成交额(万元)
+    limit_up_count: int         # 涨停家数
+    limit_down_count: int       # 跌停家数
+
+
+@app.get("/market-breadth", response_model=MarketBreadthResponse)
+def market_breadth():
+    """Market-wide breadth metrics for regime detection.
+
+    Uses Tushare daily_basic + stk_limit to compute advance/decline,
+    new highs/lows, and limit-up/down counts across the full A-share market.
+    """
+    cache_key = "market_breadth:latest"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    today_str = date.today().strftime("%Y%m%d")
+    yesterday = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
+
+    # Get today's daily data for all stocks
+    try:
+        df_today = _with_retries(
+            _pro.daily,
+            trade_date=today_str,
+        )
+    except Exception:
+        # Market might not be open yet today; try yesterday
+        try:
+            df_today = _with_retries(_pro.daily, trade_date=yesterday)
+            today_str = yesterday
+        except Exception as e:
+            logger.warning("market_breadth daily failed: %s", e)
+            raise HTTPException(status_code=502, detail=f"market_breadth upstream error: {e}")
+
+    if df_today is None or df_today.empty:
+        return MarketBreadthResponse(
+            trade_date=today_str,
+            advance_count=0, decline_count=0, flat_count=0,
+            advance_ratio=0.0, new_high_20=0, new_low_20=0,
+            total_amount=None, limit_up_count=0, limit_down_count=0,
+        )
+
+    # Advance/decline
+    pct = df_today["pct_chg"].fillna(0)
+    advance_count = int((pct > 0).sum())
+    decline_count = int((pct < 0).sum())
+    flat_count = int((pct == 0).sum())
+    total = advance_count + decline_count + flat_count
+    advance_ratio = advance_count / max(total, 1)
+
+    # Total market turnover
+    total_amount = _safe_float(df_today["amount"].sum())
+
+    # Limit up/down from stk_limit
+    try:
+        df_limit = _with_retries(_pro.stk_limit, trade_date=today_str)
+        limit_up_count = 0
+        limit_down_count = 0
+        if df_limit is not None and not df_limit.empty:
+            # A stock is at limit up if close >= up_limit (with small tolerance)
+            merged = df_today[["ts_code", "close"]].merge(
+                df_limit[["ts_code", "up_limit", "down_limit"]], on="ts_code", how="inner"
+            )
+            limit_up_count = int((merged["close"] >= merged["up_limit"] * 0.999).sum())
+            limit_down_count = int((merged["close"] <= merged["down_limit"] * 1.001).sum())
+    except Exception as e:
+        logger.warning("market_breadth stk_limit failed: %s", e)
+        limit_up_count = 0
+        limit_down_count = 0
+
+    # New 20-day highs/lows — requires historical data, skip if too slow
+    # For now, approximate using pct_chg extremes
+    new_high_20 = int((pct >= 9.9).sum())  # proxy: stocks up ~10%+
+    new_low_20 = int((pct <= -9.9).sum())  # proxy: stocks down ~10%+
+
+    result = MarketBreadthResponse(
+        trade_date=today_str,
+        advance_count=advance_count,
+        decline_count=decline_count,
+        flat_count=flat_count,
+        advance_ratio=round(advance_ratio, 4),
+        new_high_20=new_high_20,
+        new_low_20=new_low_20,
+        total_amount=total_amount,
+        limit_up_count=limit_up_count,
+        limit_down_count=limit_down_count,
+    )
+    cache_put(cache_key, result.model_dump(), 300)  # 5 min cache
+    return result
+
+
+# ---------- index-weight endpoint (指数成分权重) ------------------------------
+
+class IndexWeightRow(BaseModel):
+    ts_code: str              # constituent stock code
+    trade_date: str
+    weight: float | None = None   # weight in index (percentage)
+
+
+class IndexWeightResponse(BaseModel):
+    index_code: str
+    trade_date: str
+    rows: list[IndexWeightRow]
+
+
+_INDEX_WEIGHT_LIMITER = _TokenBucket(n=10, window_s=60)
+
+
+@app.get("/index-weight", response_model=IndexWeightResponse)
+def index_weight(
+    index: str = Query("hs300", description="hs300 / zz1000 / cyb / sz50"),
+):
+    """Index constituent weights from Tushare index_weight API.
+
+    Returns the latest available weight snapshot for the given index.
+    Useful for computing industry diffusion and sector concentration.
+    """
+    ts_index = INDEX_CODES.get(index, index if "." in index else f"{index}.SH")
+    cache_key = f"index_weight:{ts_index}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    # Get the most recent trade date available
+    today_str = date.today().strftime("%Y%m%d")
+    start = (date.today() - timedelta(days=30)).strftime("%Y%m%d")
+
+    _INDEX_WEIGHT_LIMITER.acquire()
+    try:
+        df = _with_retries(
+            _pro.index_weight,
+            ts_code=ts_index,
+            start_date=start,
+            end_date=today_str,
+        )
+    except Exception as e:
+        logger.warning("index_weight failed index=%s: %s", index, e)
+        raise HTTPException(status_code=502, detail=f"index_weight upstream error: {e}")
+
+    if df is None or df.empty:
+        return IndexWeightResponse(index_code=ts_index, trade_date=today_str, rows=[])
+
+    # Keep only the latest trade_date snapshot
+    latest_date = str(df["trade_date"].max())
+    df_latest = df[df["trade_date"] == latest_date].sort_values("weight", ascending=False)
+
+    rows = [
+        IndexWeightRow(
+            ts_code=str(r["ts_code"]),
+            trade_date=str(r["trade_date"]),
+            weight=_safe_float(r.get("weight")),
+        )
+        for _, r in df_latest.iterrows()
+    ]
+    result = IndexWeightResponse(index_code=ts_index, trade_date=latest_date, rows=rows)
+    cache_put(cache_key, result.model_dump(), 86400)  # 24h cache
     return result

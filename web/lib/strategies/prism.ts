@@ -22,6 +22,7 @@
 //   - Hurst exponent proxy for persistence detection
 import type { Signal, SymbolSnapshot } from "../strategyTypes";
 import type { Scorer } from "../backtest";
+import type { IndexDailyRow, MarketBreadth } from "../pyserver";
 
 export interface PrismScorerOptions {
   minCloses?: number;
@@ -33,6 +34,12 @@ export interface PrismScorerOptions {
   maxOneDayChasePct?: number;
   /** Target annualized volatility for position scaling (0-1). */
   targetVol?: number;
+  /** Real index daily data for regime detection (Prism-V2).
+   *  When provided, regime detection uses real index trends instead of
+   *  cross-sectional estimates. */
+  indexData?: IndexDailyRow[];
+  /** Real market breadth for regime detection (Prism-V2). */
+  marketBreadth?: MarketBreadth;
 }
 
 function avg(xs: number[]): number {
@@ -139,6 +146,74 @@ const REGIME_WEIGHTS: Record<Regime, {
   volatile: { momentum: 0.15, meanReversion: 0.15, quality: 0.40, volume: 0.15, breadth: 0.15 },
 };
 
+/** Detect market regime from real index data (Prism-V2).
+ *  Uses index trend, market breadth, and new highs/lows. */
+function detectRegimeFromIndex(
+  indexRows: IndexDailyRow[],
+  breadth: MarketBreadth | undefined,
+  lookback: number,
+): { regime: Regime; positionScale: number; cashRatio: number } {
+  if (indexRows.length < 5) return { regime: "ranging", positionScale: 0.5, cashRatio: 0.5 };
+
+  const recent = indexRows.slice(-lookback);
+  const closes = recent.map((r) => r.close ?? 0).filter((c) => c > 0);
+  if (closes.length < 5) return { regime: "ranging", positionScale: 0.5, cashRatio: 0.5 };
+
+  // Index trend: 20-day MA vs current
+  const ma20 = avg(closes.slice(-Math.min(20, closes.length)));
+  const current = closes[closes.length - 1];
+  const trendStrength = ma20 > 0 ? (current / ma20 - 1) : 0;
+
+  // Index volatility
+  const returns: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    if (closes[i - 1] > 0) returns.push(closes[i] / closes[i - 1] - 1);
+  }
+  const indexVol = std(returns);
+
+  // Market breadth
+  const advanceRatio = breadth?.advance_ratio ?? 0.5;
+  const limitUpCount = breadth?.limit_up_count ?? 0;
+  const limitDownCount = breadth?.limit_down_count ?? 0;
+
+  // Regime detection logic
+  let regime: Regime;
+  let positionScale: number;
+  let cashRatio: number;
+
+  if (indexVol > 0.025) {
+    // High volatility regime → defensive
+    regime = "volatile";
+    positionScale = 0.4;
+    cashRatio = 0.3;
+  } else if (trendStrength > 0.01 && advanceRatio > 0.55) {
+    // Uptrend with broad participation → trending
+    regime = "trending";
+    positionScale = 0.9;
+    cashRatio = 0.1;
+  } else if (trendStrength < -0.01 && advanceRatio < 0.45) {
+    // Downtrend → defensive (treat as volatile-like)
+    regime = "volatile";
+    positionScale = 0.3;
+    cashRatio = 0.5;
+  } else {
+    // Sideways → ranging
+    regime = "ranging";
+    positionScale = 0.6;
+    cashRatio = 0.2;
+  }
+
+  // Adjust for extreme breadth signals
+  if (limitDownCount > limitUpCount * 3 && limitDownCount > 50) {
+    // Panic selling → increase cash
+    regime = "volatile";
+    positionScale = Math.min(positionScale, 0.25);
+    cashRatio = Math.max(cashRatio, 0.5);
+  }
+
+  return { regime, positionScale, cashRatio };
+}
+
 export function prismScorer(options: PrismScorerOptions = {}): Scorer {
   const {
     minCloses = 30,
@@ -146,7 +221,11 @@ export function prismScorer(options: PrismScorerOptions = {}): Scorer {
     minScoreToBuy = 0.55,
     maxOneDayChasePct = 5,
     targetVol = 0.20,
+    indexData,
+    marketBreadth,
   } = options;
+
+  const hasRealRegimeData = indexData !== undefined && indexData.length > 0;
 
   return async (snapshots: SymbolSnapshot[], { asOf }): Promise<Signal[]> => {
     // Phase 1: compute per-stock returns for regime detection
@@ -230,7 +309,19 @@ export function prismScorer(options: PrismScorerOptions = {}): Scorer {
     if (stocks.length === 0) return [];
 
     // Phase 2: detect market regime
-    const regime = detectRegime(allReturns, regimeLookback);
+    let regime: Regime;
+    let positionScale = 1.0;
+    let cashRatio = 0.0;
+    if (hasRealRegimeData && indexData) {
+      // Prism-V2: use real index data and market breadth
+      const result = detectRegimeFromIndex(indexData, marketBreadth, regimeLookback);
+      regime = result.regime;
+      positionScale = result.positionScale;
+      cashRatio = result.cashRatio;
+    } else {
+      // Prism-V1: fallback to cross-sectional estimate
+      regime = detectRegime(allReturns, regimeLookback);
+    }
     const weights = REGIME_WEIGHTS[regime];
 
     // Phase 3: market breadth (% of stocks above their 20-day MA)
@@ -272,7 +363,9 @@ export function prismScorer(options: PrismScorerOptions = {}): Scorer {
 
       // Hurst-aware filter: in ranging regime, prefer low-Hurst (mean-reverting) stocks
       const hurstFilter = regime === "ranging" ? (s.hurst < 0.55 ? 1 : 0.85) : 1;
-      const finalScore = adjustedScore * hurstFilter;
+      // Prism-V2: apply regime-based position scaling
+      const regimeScalar = hasRealRegimeData ? positionScale : 1;
+      const finalScore = adjustedScore * hurstFilter * regimeScalar;
 
       // Risk filters
       const chaseBlocked = s.oneDayReturn > maxOneDayChasePct / 100;
@@ -283,19 +376,27 @@ export function prismScorer(options: PrismScorerOptions = {}): Scorer {
         !volTooHigh;
 
       const regimeLabel = regime === "trending" ? "趋势" : regime === "ranging" ? "震荡" : "高波";
+      // Strategy allocation weights based on regime (for portfolio-level guidance)
+      const stratWeights = regime === "trending"
+        ? { momentum: 0.70, tide: 0.30 }
+        : regime === "ranging"
+          ? { momentum: 0.30, tide: 0.70 }
+          : { momentum: 0.40, tide: 0.40 };
+      const weightInfo = ` 动量:${(stratWeights.momentum * 100).toFixed(0)}% 潮汐:${(stratWeights.tide * 100).toFixed(0)}%`;
+      const positionInfo = hasRealRegimeData ? ` 仓位:${(positionScale * 100).toFixed(0)}% 现金:${(cashRatio * 100).toFixed(0)}%` : "";
       const action = actionable ? "buy" : volTooHigh || (regime === "volatile" && finalScore < 0.4) ? "sell" : "hold";
       const reason = chaseBlocked
         ? "追高过滤"
         : volTooHigh
           ? "波动率过高"
-          : `状态:${regimeLabel} H:${s.hurst.toFixed(2)} 宽度:${(breadth * 100).toFixed(0)}%`;
+          : `状态:${regimeLabel} H:${s.hurst.toFixed(2)} 宽度:${(breadth * 100).toFixed(0)}%${positionInfo}${weightInfo}`;
 
       return {
         symbol: s.symbol,
         action,
         confidence: Math.max(0, Math.min(1, finalScore)),
-        size: action === "buy" ? 1 : 0,
-        rationale: `棱镜: ${reason}`,
+        size: action === "buy" ? (hasRealRegimeData ? positionScale : 1) : 0,
+        rationale: `棱镜${hasRealRegimeData ? "-V2" : ""}: ${reason}`,
       };
     });
 

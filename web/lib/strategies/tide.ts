@@ -16,6 +16,7 @@
 // augmented with Tushare moneyflow / top_list via pyserver.
 import type { Signal, SymbolSnapshot } from "../strategyTypes";
 import type { Scorer } from "../backtest";
+import type { MoneyflowRow, MarginRow } from "../pyserver";
 
 export interface TideScorerOptions {
   minCloses?: number;
@@ -29,6 +30,13 @@ export interface TideScorerOptions {
   minScoreToBuy?: number;
   /** Maximum 1-day return to still allow buying (anti-chase). */
   maxOneDayChasePct?: number;
+  /** Real Tushare moneyflow data per symbol (Tide-V2). When provided,
+   *  the scorer augments its OHLCV-based factors with real capital-flow
+   *  data: 主力净流入, 大单买卖差, 资金流持续性. */
+  moneyflowData?: Record<string, MoneyflowRow[]>;
+  /** Real Tushare margin detail data per symbol (Tide-V2). When provided,
+   *  adds 融资余额变化 as a confirmation factor for leveraged sentiment. */
+  marginData?: Record<string, MarginRow[]>;
 }
 
 function avg(xs: number[]): number {
@@ -161,9 +169,27 @@ export function tideScorer(options: TideScorerOptions = {}): Scorer {
     spikeThreshold = 2.0,
     minScoreToBuy = 0.56,
     maxOneDayChasePct = 5,
+    moneyflowData,
+    marginData,
   } = options;
 
+  // Tide-V2: if moneyflow data was requested but is empty/unavailable,
+  // the strategy is suspended — return no signals.
+  const moneyflowRequested = moneyflowData !== undefined;
+  const moneyflowAvailable = moneyflowData !== undefined && Object.keys(moneyflowData).length > 0;
+
   return async (snapshots: SymbolSnapshot[], { asOf }): Promise<Signal[]> => {
+    if (moneyflowRequested && !moneyflowAvailable) {
+      // Strategy suspended: data source is down
+      return snapshots.map((s) => ({
+        symbol: s.symbol,
+        action: "hold" as const,
+        confidence: 0,
+        size: 0,
+        rationale: "潮汐: 资金流数据不可用，策略暂停",
+      }));
+    }
+
     interface Scored {
       symbol: string;
       flowMom: number | null;
@@ -175,6 +201,12 @@ export function tideScorer(options: TideScorerOptions = {}): Scorer {
       ma5: number;
       ma20: number;
       momentum20: number;
+      // Tide-V2 real moneyflow factors
+      netFlowRatio: number | null;
+      largeOrderImbalance: number | null;
+      flowPersistence: number | null;
+      // Tide-V2 margin balance change factor (融资余额变化)
+      marginChange: number | null;
     }
     const scored: Scored[] = [];
 
@@ -185,6 +217,43 @@ export function tideScorer(options: TideScorerOptions = {}): Scorer {
 
       const current = closes[closes.length - 1];
       const previous = closes[closes.length - 2];
+
+      // Real moneyflow factors (Tide-V2)
+      let netFlowRatio: number | null = null;
+      let largeOrderImbalance: number | null = null;
+      let flowPersistence: number | null = null;
+      let marginChange: number | null = null;
+      if (moneyflowData && moneyflowData[s.symbol]) {
+        const mfRows = moneyflowData[s.symbol];
+        if (mfRows.length > 0) {
+          const latest = mfRows[mfRows.length - 1];
+          const totalLg = (latest.buy_lg_amount ?? 0) + (latest.sell_lg_amount ?? 0);
+          // Net flow ratio: net_mf_amount normalized by large-order volume
+          netFlowRatio = totalLg > 0 ? (latest.net_mf_amount ?? 0) / totalLg : null;
+          // Large order imbalance: buy vs sell
+          largeOrderImbalance = totalLg > 0
+            ? ((latest.buy_lg_amount ?? 0) - (latest.sell_lg_amount ?? 0)) / totalLg
+            : null;
+          // Flow persistence: fraction of recent days with positive net flow
+          const recent = mfRows.slice(-10);
+          if (recent.length > 0) {
+            const positiveDays = recent.filter((r) => (r.net_mf_amount ?? 0) > 0).length;
+            flowPersistence = positiveDays / recent.length;
+          }
+        }
+      }
+      // Margin balance change (融资余额变化): rising margin = bullish leverage sentiment
+      if (marginData && marginData[s.symbol]) {
+        const mgRows = marginData[s.symbol];
+        if (mgRows.length >= 2) {
+          const latestRzye = mgRows[mgRows.length - 1].rzye;
+          const prevRzye = mgRows[0].rzye;
+          if (latestRzye != null && prevRzye != null && prevRzye > 0) {
+            marginChange = (latestRzye - prevRzye) / prevRzye;
+          }
+        }
+      }
+
       scored.push({
         symbol: s.symbol,
         flowMom: capitalFlowMomentum(closes, volumes, flowLookback),
@@ -196,6 +265,10 @@ export function tideScorer(options: TideScorerOptions = {}): Scorer {
         ma5: avg(closes.slice(-5)),
         ma20: avg(closes.slice(-20)),
         momentum20: current / closes[closes.length - 21] - 1,
+        netFlowRatio,
+        largeOrderImbalance,
+        flowPersistence,
+        marginChange,
       });
     }
     if (scored.length === 0) return [];
@@ -206,15 +279,49 @@ export function tideScorer(options: TideScorerOptions = {}): Scorer {
     const divScores = rankNormalize(scored.map((s) => s.divergence));
     const accScores = rankNormalize(scored.map((s) => s.accumulation));
     const loScores = rankNormalize(scored.map((s) => s.largeOrder));
+    // Tide-V2: real moneyflow factors
+    const netFlowScores = rankNormalize(scored.map((s) => s.netFlowRatio));
+    const imbalanceScores = rankNormalize(scored.map((s) => s.largeOrderImbalance));
+    const persistenceScores = rankNormalize(scored.map((s) => s.flowPersistence));
+    const marginScores = rankNormalize(scored.map((s) => s.marginChange));
+
+    const hasRealMoneyflow = scored.some((s) => s.netFlowRatio != null);
+    const hasMarginData = scored.some((s) => s.marginChange != null);
 
     const signals: Signal[] = scored.map((s, i) => {
-      // Weighted composite: flow 30% + OBV 25% + divergence 20% + accumulation 15% + large order 10%
-      const composite =
-        0.30 * flowScores[i] +
-        0.25 * obvScores[i] +
-        0.20 * divScores[i] +
-        0.15 * accScores[i] +
-        0.10 * loScores[i];
+      let composite: number;
+      if (hasRealMoneyflow && hasMarginData) {
+        // Tide-V2 full weights: OHLCV (40%) + moneyflow (45%) + margin (15%)
+        composite =
+          0.15 * flowScores[i] +    // OHLCV capital flow momentum
+          0.10 * obvScores[i] +     // OBV slope
+          0.05 * divScores[i] +     // volume-price divergence
+          0.05 * accScores[i] +     // accumulation
+          0.05 * loScores[i] +      // large order proxy
+          0.20 * netFlowScores[i] + // real net flow ratio
+          0.15 * imbalanceScores[i] + // real large order imbalance
+          0.10 * persistenceScores[i] + // flow persistence
+          0.15 * marginScores[i];   // 融资余额变化
+      } else if (hasRealMoneyflow) {
+        // Tide-V2 without margin: OHLCV (45%) + moneyflow (55%)
+        composite =
+          0.15 * flowScores[i] +    // OHLCV capital flow momentum
+          0.10 * obvScores[i] +     // OBV slope
+          0.10 * divScores[i] +     // volume-price divergence
+          0.10 * accScores[i] +     // accumulation
+          0.10 * loScores[i] +      // large order proxy
+          0.20 * netFlowScores[i] + // real net flow ratio
+          0.15 * imbalanceScores[i] + // real large order imbalance
+          0.10 * persistenceScores[i]; // flow persistence
+      } else {
+        // Original Tide-V1 weights (OHLCV only)
+        composite =
+          0.30 * flowScores[i] +
+          0.25 * obvScores[i] +
+          0.20 * divScores[i] +
+          0.15 * accScores[i] +
+          0.10 * loScores[i];
+      }
 
       // Trend filter: don't buy against major trend
       const trendBroken = s.ma5 < s.ma20 * 0.97 && s.momentum20 < -0.05;
@@ -229,6 +336,12 @@ export function tideScorer(options: TideScorerOptions = {}): Scorer {
 
       const flowText = s.flowMom != null ? (s.flowMom * 100).toFixed(2) : "-";
       const obvText = s.obv != null ? s.obv.toFixed(3) : "-";
+      const mfText = hasRealMoneyflow && s.netFlowRatio != null
+        ? ` 净流入:${(s.netFlowRatio * 100).toFixed(1)}%`
+        : "";
+      const marginText = hasMarginData && s.marginChange != null
+        ? ` 融资${s.marginChange >= 0 ? "+" : ""}${(s.marginChange * 100).toFixed(1)}%`
+        : "";
       const action = actionable ? "buy" : trendBroken ? "sell" : "hold";
       const reason = trendBroken
         ? "趋势破坏"
@@ -236,14 +349,14 @@ export function tideScorer(options: TideScorerOptions = {}): Scorer {
           ? "追高过滤"
           : !hasFlowSupport
             ? "资金流不支持"
-            : `资金流入${flowText} OBV${obvText}`;
+            : `资金流入${flowText} OBV${obvText}${mfText}${marginText}`;
 
       return {
         symbol: s.symbol,
         action,
         confidence: Math.max(0, Math.min(1, composite)),
         size: action === "buy" ? 1 : 0,
-        rationale: `潮汐: ${reason}`,
+        rationale: `潮汐${hasRealMoneyflow ? "-V2" : ""}: ${reason}`,
       };
     });
 
