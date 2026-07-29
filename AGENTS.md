@@ -1,57 +1,70 @@
-# Repository Guidelines
+# ashare-pilot Repository Rules
 
-## Project Structure & Module Organization
+This repository is the production A-share research and signal product.
+The accepted architecture is documented in
+[`docs/architecture/`](docs/architecture/README.md). Historical implementations
+belong in the separate `ashare-pilot-legacy` repository and must not remain as
+production fallbacks, examples, fixtures, or hidden dependencies.
 
-This repository contains a Chinese-market “silicon civilization consumer stocks” trading system.
+## Non-negotiable Rules
 
-- `web/`: Next.js 15 App Router frontend, API routes, TypeScript backtests, DeepSeek integration, SQLite cache, and tests.
-- `web/app/`: UI pages and route handlers. Key pages include `page.tsx`, `signals/page.tsx`, `backtest/page.tsx`, and `dashboard/page.tsx`.
-- `web/lib/`: shared domain logic such as `universe.ts`, `pyserver.ts`, `deepseek.ts`, `backtest.ts`, `dashboardBacktest.ts`, `dashboardData.ts`, and `cache.ts`.
-- `web/test/`: Node test-runner TypeScript tests named `*.test.ts`.
-- `web/data/universe.json`: editable stock universe data.
-- `pyserver/`: FastAPI sidecar for Tushare Pro access and SQLite market-data caching.
-- `research/`: isolated Python 3.11 Qlib/LightGBM research, append-only ledger, drift checks, and model registry.
-- `ops/agents/`: bounded Hermes, Gemini, and Claude job manifests plus worktree dispatcher.
-- `ops/analytics/`: self-hosted Umami analytics, Nginx rate-limit configs, and runtime Dockerfile.
-- `tickflow-stock-panel/`: standalone stock panel sub-project with FastAPI backend, React frontend, and Docker packaging.
-- `monitoring/`: buy-watch monitoring scripts and daily state-check utilities.
-- `reports/`: dated research reports, data benchmarks, and strategy run outputs.
+1. Python `research/` is the sole authority for production strategy semantics,
+   backtests, portfolio targets, and production signal generation.
+2. `web/` presents versioned production artifacts. It must not contain an
+   independent strategy or backtest engine.
+3. Historical research and production eligibility use point-in-time CSI 800
+   membership. The old `web/data/universe.json` belongs to Legacy; any retained
+   AI watch data must use a separate versioned annotation contract and never
+   grant production trading eligibility.
+4. Every market decision must bind an explicit `as_of` or trading date. Never
+   substitute the latest snapshot or wall-clock date for point-in-time data.
+5. There is no fallback or import from the Legacy repository. Reusable code is
+   migrated by reviewed copy with current contracts and tests.
+6. Degraded operation follows
+   [`ADR-003`](docs/architecture/decisions/ADR-003-degraded-operation.md).
+   Stale data blocks new decisions; it does not by itself authorize a blind
+   liquidation.
+7. Shared transaction costs, trading constraints, signal schemas, and runtime
+   contracts are controlled interfaces. Changes require a focused review and
+   contract tests in every consuming language.
+8. Agents work only in isolated worktrees and within machine-enforced paths.
+   A prompt, `context_files`, or prose prohibition is not a security boundary.
+9. Weak models may implement already-defined behavior. They may not define or
+   change strategy semantics, contracts, promotion gates, execution rules,
+   universes, production runtime, secrets, or deployment behavior.
+10. Never reset, clean, stash, overwrite, or merge unrelated user or agent work.
+11. Production and Legacy repositories must not share writable databases,
+    runtime directories, generated artifacts, source imports, symlinks, or
+    deployment state.
 
-## Build, Test, and Development Commands
+## Repository Map
 
-- `cd pyserver && uv sync`: install locked Python dependencies.
-- `cd pyserver && uv run uvicorn main:app --port 8001 --reload`: run the Tushare sidecar locally.
-- `cd web && npm install`: install frontend dependencies.
-- `cd web && npm run dev`: start the Next.js dev server at `http://localhost:3000`.
-- `cd web && npm test`: run TypeScript unit tests via `node --test --import tsx`.
-- `cd web && ./node_modules/.bin/tsc --noEmit`: type-check the frontend.
-- `cd web && npm run build`: create a production Next.js build.
-- `cd research && uv sync --group dev`: install the locked Python 3.11 research environment.
-- `cd research && uv run pytest -q`: run research ledger, label, walk-forward, promotion, and rollback tests.
-- `python3 ops/agents/dispatch.py ops/agents/manifests/daily-data-quality.json`: run a bounded agent job.
+| Path | Responsibility | Local rules |
+|---|---|---|
+| `research/` | Authoritative research, backtest, promotion, portfolio and production signals | [`research/AGENTS.md`](research/AGENTS.md) |
+| `pyserver/` | Market-data acquisition, normalization, caching and data-quality endpoints | [`pyserver/AGENTS.md`](pyserver/AGENTS.md) |
+| `web/` | Product UI and read-only production APIs | [`web/AGENTS.md`](web/AGENTS.md) |
+| `ops/` | Orchestration, agent dispatch, deployment and operational evidence | [`ops/AGENTS.md`](ops/AGENTS.md) |
+| `config/` | Shared cost and trading-constraint definitions | Root rules apply |
+| `docs/architecture/` | Accepted decisions, contracts and ownership | Architecture owner review |
 
-## Coding Style & Naming Conventions
+Files classified for extraction in
+[`PROJECT_SPLIT.md`](docs/architecture/PROJECT_SPLIT.md) are not valid
+production dependencies even while the physical split is in progress.
 
-Use TypeScript for frontend and shared web logic. Prefer small helpers in `web/lib/` and keep route handlers thin. Follow existing 2-space indentation in TS/TSX files, `camelCase` for variables/functions, and `PascalCase` for React components. Keep Python sidecar code typed where practical with Pydantic models for HTTP contracts. Do not commit generated caches such as `cache.db`, `.env`, `.env.local`, or dependency directories.
+## Change Classification
 
-## Testing Guidelines
+- **Leaf change:** one subsystem, no contract or production-semantic change.
+  It may be delegated with narrow paths and an objective acceptance command.
+- **Contract change:** affects data shape, meaning, freshness, versioning, cost,
+  execution, universe membership, or cross-system behavior. Use a focused
+  change reviewed by the architecture owner.
+- **Production change:** affects strategy, portfolio, promotion, signal
+  activation, deployment, or degraded behavior. It requires strong-model
+  review, full relevant tests, and explicit human approval.
 
-Frontend tests use Node’s built-in test runner. Place tests in `web/test/` with names like `backtest.test.ts` and cover regression-prone logic in `web/lib/`, especially caching, concurrency, universe refresh, and backtest behavior. Run `npm test` and `tsc --noEmit` before submitting changes that touch the web app.
+## Required Handoff
 
-Research tests use pytest. Every point-in-time label, promotion gate, registry mutation, drift guard, and symbol adapter needs a regression test. Never describe a candidate as active until the registry records a passed promotion.
-
-## Strategy and Agent Safety
-
-- `daily:close` may update data and run deterministic inference, but it must not train, tune, promote, or modify tracked files.
-- V1 remains the production fallback. Shadow predictions cannot change orders, holdings, or historical curves.
-- ML decisions use D-close features and D+1-open execution. The 2026 post-CNY window is final acceptance only, never parameter selection.
-- Agents may edit code only in isolated worktrees and only inside manifest `allowed_paths`. They may not edit `active_model.json`, production runtime, the universe, or deploy scripts.
-- Codex owns shared interfaces, execution semantics, final review, tests, and integration.
-
-## Commit & Pull Request Guidelines
-
-Recent history uses concise imperative commit subjects, for example `Replace akshare with Tushare Pro` and `Fix backtest 500 + expand test coverage 1→18`. Keep commits focused and avoid mixing web, sidecar, and data-only changes unless they are part of one feature. Pull requests should include a behavior summary, test commands run, linked issue if available, screenshots for UI changes, and required environment variables.
-
-## Security & Configuration Tips
-
-Copy `pyserver/env.example` to `pyserver/.env` and set `TUSHARE_TOKEN`. Copy `web/env.example.txt` to `web/.env.local` and set `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `PYSERVER_URL` as needed. Keep API keys local only.
+Every implementation handoff must state the base commit, changed paths,
+commands actually run, results, remaining risks, and whether any runtime,
+universe, strategy, contract, or deployment state changed.
