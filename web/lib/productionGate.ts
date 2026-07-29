@@ -530,10 +530,52 @@ function zeroCounts(): Record<"buy" | "hold" | "sell", number> {
   return { buy: 0, hold: 0, sell: 0 };
 }
 
+// A signal snapshot is only servable while its decision date stays close to
+// the current Asia/Shanghai calendar date. The longest A-share closure
+// (Spring Festival) spans at most ~11 calendar days between sessions, so a
+// 15-day default tolerates every holiday while still failing closed within
+// roughly two weeks if the daily-close pipeline stops refreshing data.
+export const PRODUCTION_SIGNALS_MAX_AGE_DAYS_DEFAULT = 15;
+
+export function productionSignalsMaxAgeDays(): number {
+  const raw = process.env.PRODUCTION_SIGNALS_MAX_AGE_DAYS;
+  if (!raw) return PRODUCTION_SIGNALS_MAX_AGE_DAYS_DEFAULT;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return PRODUCTION_SIGNALS_MAX_AGE_DAYS_DEFAULT;
+  }
+  return Math.floor(parsed);
+}
+
+function shanghaiDateString(now: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const get = (type: string) =>
+    parts.find((part) => part.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+export function isProductionSignalSnapshotStale(
+  snapshot: Pick<ProductionSignalsSnapshot, "signal_date">,
+  now: Date = new Date(),
+  maxAgeDays: number = productionSignalsMaxAgeDays(),
+): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(snapshot.signal_date)) return true;
+  const signalTime = Date.parse(`${snapshot.signal_date}T00:00:00Z`);
+  const todayTime = Date.parse(`${shanghaiDateString(now)}T00:00:00Z`);
+  if (!Number.isFinite(signalTime) || !Number.isFinite(todayTime)) return true;
+  return todayTime - signalTime > maxAgeDays * 86_400_000;
+}
+
 export function buildProductionSignalsApiPayload(
   gate: ProductionGateSnapshot,
   snapshot: ProductionSignalsSnapshot | null,
   requestedAsOf?: string | null,
+  options: { now?: Date; maxAgeDays?: number } = {},
 ): ProductionSignalsApiPayload {
   const snapshotMatchesGate = Boolean(
     snapshot &&
@@ -545,23 +587,33 @@ export function buildProductionSignalsApiPayload(
       snapshot.reason_codes.every((code, index) => code === gate.reason_codes[index]),
   );
   const requestedDateMatches = !requestedAsOf || snapshot?.signal_date === requestedAsOf;
+  const signalsStale = Boolean(
+    snapshot &&
+      isProductionSignalSnapshotStale(
+        snapshot,
+        options.now ?? new Date(),
+        options.maxAgeDays ?? productionSignalsMaxAgeDays(),
+      ),
+  );
   const canServeActive = Boolean(
     gate.status === "active" &&
       gate.champion_id &&
       snapshotMatchesGate &&
-      requestedDateMatches,
+      requestedDateMatches &&
+      !signalsStale,
   );
 
   if (!canServeActive) {
     const reasonCodes = [...gate.reason_codes];
     if (!snapshotMatchesGate) reasonCodes.push("PRODUCTION_SIGNALS_MISSING_OR_MISMATCHED");
     if (!requestedDateMatches) reasonCodes.push("REQUESTED_AS_OF_UNAVAILABLE");
+    if (signalsStale) reasonCodes.push("PRODUCTION_SIGNALS_STALE");
     return {
       generated_at: new Date().toISOString(),
       source: "production-gate",
       status: "cash-only",
       champion_id: null,
-      stale: !snapshotMatchesGate || !requestedDateMatches,
+      stale: !snapshotMatchesGate || !requestedDateMatches || signalsStale,
       signal_date: snapshot?.signal_date ?? null,
       latest_complete_date: snapshot?.latest_complete_date ?? null,
       signal_basis: snapshot?.signal_basis ?? null,

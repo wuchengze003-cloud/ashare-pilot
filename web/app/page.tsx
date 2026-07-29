@@ -1,5 +1,6 @@
 import Link from "next/link";
 import {
+  isProductionSignalSnapshotStale,
   readProductionGate,
   readProductionSignals,
 } from "@/lib/productionGate";
@@ -97,8 +98,12 @@ export default function Home() {
   const minuteRequired = gate.candidates.some(
     (candidate) => candidate.signal_frequency === "1d+5min",
   );
+  const signalsStale =
+    gate.status === "active" &&
+    (!productionSignals || isProductionSignalSnapshotStale(productionSignals));
   const currentSignals =
     isActive &&
+    !signalsStale &&
     productionSignals?.status === "active" &&
     productionSignals.champion_id === gate.champion_id
       ? productionSignals.signals
@@ -133,18 +138,26 @@ export default function Home() {
       </header>
 
       <section
-        className={`production-status ${isActive ? "active" : "cash-only"}`}
+        className={`production-status ${isActive && !signalsStale ? "active" : "cash-only"}`}
         aria-labelledby="production-status-title"
       >
         <div>
           <div className="eyebrow">当前生产决策</div>
           <h2 id="production-status-title">
-            {isActive ? "生产策略运行中" : "保持现金，不开新仓"}
+            {isActive
+              ? signalsStale
+                ? "信号数据陈旧，暂停执行"
+                : "生产策略运行中"
+              : "保持现金，不开新仓"}
           </h2>
-          <p>{gate.message}</p>
+          <p>
+            {signalsStale
+              ? "生产信号快照超过新鲜度窗口，系统按 fail-closed 处理：不展示可执行买点，等待收盘链路重新发布。"
+              : gate.message}
+          </p>
         </div>
-        <div className={`production-state ${isActive ? "active" : "cash-only"}`}>
-          {isActive ? "运行中" : "仅现金"}
+        <div className={`production-state ${isActive && !signalsStale ? "active" : "cash-only"}`}>
+          {isActive ? (signalsStale ? "数据陈旧" : "运行中") : "仅现金"}
         </div>
       </section>
 

@@ -6,6 +6,8 @@ import {
   deriveProductionGate,
   type DailyRaceReport,
   type MinuteRaceReport,
+  type ProductionGateSnapshot,
+  type ProductionSignalsSnapshot,
 } from "../lib/productionGate";
 
 const generatedAt = "2026-07-28T10:00:00.000Z";
@@ -200,7 +202,7 @@ test("active champion may deterministically publish no trades", () => {
     signal_basis: "latest-complete-close",
     reason_codes: [],
     signals: [],
-  });
+  }, null, { now: new Date("2026-07-28T20:00:00+08:00") });
 
   assert.equal(payload.status, "active");
   assert.equal(payload.champion_id, "prism-v3");
@@ -360,4 +362,119 @@ test("daily-only race remains cash-only without an exact implementation", () => 
   assert.equal(gate.status, "cash-only");
   assert.ok(gate.reason_codes.includes("CHAMPION_IMPLEMENTATION_MISSING"));
   assert.ok(!gate.reason_codes.includes("MINUTE_REPORT_MISSING"));
+});
+
+function activeGateFixture(): ProductionGateSnapshot {
+  const minute: MinuteRaceReport = {
+    schema_version: 2,
+    status: "production_champion_selected",
+    contract_sha256: "contract",
+    minute_data_sha256: "minute-sha",
+    required_symbol_days: 100,
+    available_symbol_days: 100,
+    minute_coverage_pct: 100,
+    missing_symbol_days: 0,
+    candidates: [{ candidate_id: "prism-v3", integrated_gates_passed: true }],
+    production_champion: "prism-v3",
+  };
+  return deriveProductionGate(passingDaily, minute, {
+    generatedAt,
+    deployableChampionIds: ["prism-v3"],
+  });
+}
+
+function activeSnapshotFixture(
+  gate: ProductionGateSnapshot,
+  signalDate: string,
+): ProductionSignalsSnapshot {
+  return {
+    schema_version: 2,
+    generated_at: generatedAt,
+    gate_generated_at: gate.generated_at,
+    contract_sha256: gate.contract_sha256,
+    status: "active",
+    champion_id: gate.champion_id,
+    signal_date: signalDate,
+    latest_complete_date: signalDate,
+    signal_basis: "latest-complete-close",
+    reason_codes: [],
+    signals: [
+      {
+        symbol: "000001",
+        action: "buy",
+        confidence: 0.9,
+        size: 0.2,
+        rationale: "freshness fixture",
+      },
+    ],
+  };
+}
+
+// Asia/Shanghai 2026-07-28 20:00, i.e. after the 2026-07-28 close.
+const freshnessNow = new Date("2026-07-28T20:00:00+08:00");
+
+test("stale production signals are served cash-only with an explicit reason", () => {
+  const gate = activeGateFixture();
+  const snapshot = activeSnapshotFixture(gate, "2026-07-01");
+  const payload = buildProductionSignalsApiPayload(gate, snapshot, null, {
+    now: freshnessNow,
+  });
+
+  assert.equal(payload.status, "cash-only");
+  assert.equal(payload.champion_id, null);
+  assert.equal(payload.stale, true);
+  assert.ok(payload.reason_codes.includes("PRODUCTION_SIGNALS_STALE"));
+  assert.deepEqual(payload.signals, []);
+  assert.equal(payload.gross_buy_weight, 0);
+});
+
+test("signals inside the freshness window stay active", () => {
+  const gate = activeGateFixture();
+  const snapshot = activeSnapshotFixture(gate, "2026-07-20");
+  const payload = buildProductionSignalsApiPayload(gate, snapshot, null, {
+    now: freshnessNow,
+  });
+
+  assert.equal(payload.status, "active");
+  assert.equal(payload.stale, false);
+  assert.equal(payload.signals.length, 1);
+  assert.equal(payload.gross_buy_weight, 0.2);
+});
+
+test("a snapshot exactly at the age limit is still fresh", () => {
+  const gate = activeGateFixture();
+  const snapshot = activeSnapshotFixture(gate, "2026-07-13");
+  const payload = buildProductionSignalsApiPayload(gate, snapshot, null, {
+    now: freshnessNow,
+  });
+
+  assert.equal(payload.status, "active");
+  assert.equal(payload.stale, false);
+});
+
+test("the freshness window is configurable and fails closed beyond it", () => {
+  const gate = activeGateFixture();
+  const snapshot = activeSnapshotFixture(gate, "2026-07-20");
+  const payload = buildProductionSignalsApiPayload(gate, snapshot, null, {
+    now: freshnessNow,
+    maxAgeDays: 5,
+  });
+
+  assert.equal(payload.status, "cash-only");
+  assert.equal(payload.stale, true);
+  assert.ok(payload.reason_codes.includes("PRODUCTION_SIGNALS_STALE"));
+  assert.deepEqual(payload.signals, []);
+});
+
+test("a snapshot with an invalid signal date is treated as stale", () => {
+  const gate = activeGateFixture();
+  const snapshot = activeSnapshotFixture(gate, "not-a-date");
+  const payload = buildProductionSignalsApiPayload(gate, snapshot, null, {
+    now: freshnessNow,
+  });
+
+  assert.equal(payload.status, "cash-only");
+  assert.equal(payload.stale, true);
+  assert.ok(payload.reason_codes.includes("PRODUCTION_SIGNALS_STALE"));
+  assert.deepEqual(payload.signals, []);
 });
