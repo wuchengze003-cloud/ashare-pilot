@@ -26,13 +26,25 @@ import { getStrategy, getDefaultStrategy, STRATEGIES } from "../lib/strategyRegi
 import { buildLatestPlan, buildPromotedModelPlan, type LatestPlan } from "../lib/latestPlan";
 import { modelSnapshotForDate } from "../lib/mlShadow";
 import { readRuntimeJson, writeRuntimeJson, writeStrategyJson, runtimeStrategyDir } from "../lib/runtimeData";
+import {
+  PRODUCTION_GATE_FILE,
+  PRODUCTION_SIGNALS_FILE,
+  buildCashOnlyProductionSignals,
+  deriveProductionGateFromFiles,
+} from "../lib/productionGate";
 import { toCostConfig, roundTripBps } from "../lib/costConfig";
+import { loadTradingConstraints } from "../lib/tradingConstraints";
 import {
   buildSignalHistorySnapshot,
   readSignalHistorySnapshots,
   writeSignalHistorySnapshot,
 } from "../lib/signalHistory";
-import { assertRuntimeArtifacts, readRuntimeValidationInput } from "../lib/runtimeValidation";
+import {
+  assertProductionRuntimeArtifacts,
+  assertRuntimeArtifacts,
+  readProductionRuntimeValidationInput,
+  readRuntimeValidationInput,
+} from "../lib/runtimeValidation";
 import {
   buildSymbolSeries,
   buildSymbolSeriesFromPyserverCache,
@@ -48,6 +60,31 @@ import {
   type IndexDailyRow,
   type MarketBreadth,
 } from "../lib/pyserver";
+import type { EnhancementDataStatus } from "../lib/strategies/tide";
+
+interface StrategyScorerData extends Record<string, unknown> {
+  moneyflowData?: Record<string, MoneyflowRow[]>;
+  marginData?: Record<string, MarginRow[]>;
+  moneyflowStatus?: EnhancementDataStatus;
+  moneyflowCoverage?: number;
+  marginCoverage?: number;
+  indexData?: IndexDailyRow[];
+  marketBreadthData?: MarketBreadth[];
+  regimeDataStatus?: EnhancementDataStatus;
+}
+
+function dateMinusCalendarDays(value: string, days: number): string {
+  const parsed = new Date(`${value}T00:00:00Z`);
+  parsed.setUTCDate(parsed.getUTCDate() - days);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function coverageStatus(covered: number, total: number): EnhancementDataStatus {
+  const ratio = total > 0 ? covered / total : 0;
+  if (ratio >= 0.9) return "available";
+  if (ratio >= 0.5) return "partial";
+  return "unavailable";
+}
 
 /**
  * Fetch strategy-specific enhancement data from pyserver.
@@ -62,8 +99,13 @@ import {
 async function fetchStrategyScorerData(
   strategyId: string,
   symbols: string[],
-): Promise<Record<string, unknown>> {
-  const opts: Record<string, unknown> = {};
+  range: { startDate: string; endDate: string },
+): Promise<StrategyScorerData> {
+  const opts: StrategyScorerData = {};
+  const historyRange = {
+    startDate: dateMinusCalendarDays(range.startDate, 120),
+    endDate: range.endDate,
+  };
 
   if (strategyId === "tide") {
     try {
@@ -78,8 +120,8 @@ async function fetchStrategyScorerData(
         const results = await Promise.allSettled(
           batch.map(async (sym) => {
             const [mf, mg] = await Promise.allSettled([
-              fetchMoneyflow(sym, 20),
-              fetchMarginDetail(sym, 20),
+              fetchMoneyflow(sym, historyRange),
+              fetchMarginDetail(sym, historyRange),
             ]);
             return { sym, mf, mg };
           }),
@@ -97,15 +139,25 @@ async function fetchStrategyScorerData(
         }
       }
 
-      if (Object.keys(moneyflowData).length > 0) opts.moneyflowData = moneyflowData;
-      if (Object.keys(marginData).length > 0) opts.marginData = marginData;
+      const moneyflowCount = Object.keys(moneyflowData).length;
+      const marginCount = Object.keys(marginData).length;
+      opts.moneyflowData = moneyflowData;
+      opts.marginData = marginData;
+      opts.moneyflowStatus = coverageStatus(moneyflowCount, symbols.length);
+      opts.moneyflowCoverage = symbols.length > 0 ? moneyflowCount / symbols.length : 0;
+      opts.marginCoverage = symbols.length > 0 ? marginCount / symbols.length : 0;
       console.log(
-        `[tide] Moneyflow: ${Object.keys(moneyflowData).length}/${symbols.length} symbols, ` +
-        `Margin: ${Object.keys(marginData).length}/${symbols.length} symbols`,
+        `[tide] Moneyflow: ${moneyflowCount}/${symbols.length} symbols (${opts.moneyflowStatus}), ` +
+        `Margin: ${marginCount}/${symbols.length} symbols`,
       );
     } catch (err) {
+      opts.moneyflowData = {};
+      opts.marginData = {};
+      opts.moneyflowStatus = "unavailable";
+      opts.moneyflowCoverage = 0;
+      opts.marginCoverage = 0;
       console.log(
-        `[tide] Enhancement data fetch failed (will use V1 fallback): ` +
+        `[tide] Enhancement data fetch failed (strategy suspended): ` +
         `${err instanceof Error ? err.message : String(err)}`,
       );
     }
@@ -113,17 +165,24 @@ async function fetchStrategyScorerData(
     try {
       console.log("[prism] Fetching index daily + market breadth from pyserver...");
       const [indexResult, breadthResult] = await Promise.allSettled([
-        fetchIndexDaily("000300.SH", 60),
+        fetchIndexDaily("000300.SH", historyRange),
         fetchMarketBreadth(),
       ]);
       if (indexResult.status === "fulfilled") {
         opts.indexData = indexResult.value.rows as IndexDailyRow[];
+        opts.regimeDataStatus = indexResult.value.rows.length >= 20
+          ? "available"
+          : indexResult.value.rows.length >= 5
+            ? "partial"
+            : "unavailable";
         console.log(`[prism] Index daily: ${indexResult.value.rows.length} bars (CSI300)`);
       } else {
-        console.log("[prism] Index daily fetch failed, using cross-sectional fallback");
+        opts.indexData = [];
+        opts.regimeDataStatus = "unavailable";
+        console.log("[prism] Index daily fetch failed, strategy suspended");
       }
       if (breadthResult.status === "fulfilled") {
-        opts.marketBreadth = breadthResult.value as MarketBreadth;
+        opts.marketBreadthData = [breadthResult.value as MarketBreadth];
         console.log(
           `[prism] Market breadth: advance_ratio=${breadthResult.value.advance_ratio.toFixed(2)}, ` +
           `new_high_20=${breadthResult.value.new_high_20}, new_low_20=${breadthResult.value.new_low_20}`,
@@ -132,8 +191,11 @@ async function fetchStrategyScorerData(
         console.log("[prism] Market breadth fetch failed, using cross-sectional fallback");
       }
     } catch (err) {
+      opts.indexData = [];
+      opts.marketBreadthData = [];
+      opts.regimeDataStatus = "unavailable";
       console.log(
-        `[prism] Enhancement data fetch failed (will use V1 fallback): ` +
+        `[prism] Enhancement data fetch failed (strategy suspended): ` +
         `${err instanceof Error ? err.message : String(err)}`,
       );
     }
@@ -184,14 +246,29 @@ const isIntradaySnapshot =
   (intradayOverride !== "0" && explicitEndDate && requestedEndDate === today && beforeShanghaiClose());
 const snapshotBasis = isIntradaySnapshot ? "intraday-midday" : "latest-complete-close";
 const snapshotLabel = isIntradaySnapshot ? "午盘快照" : "完整收盘";
+const productionConstraints = loadTradingConstraints();
 const decisionEveryNDays = Number(process.env.DASHBOARD_DECISION_EVERY ?? process.env.DASHBOARD_REBALANCE ?? 1);
-const maxPositions = Number(process.env.DASHBOARD_MAX_POSITIONS ?? 4);
-const minHoldBars = Number(process.env.DASHBOARD_MIN_HOLD_BARS ?? 5);
-const rebalanceThresholdPct = Number(process.env.DASHBOARD_REBALANCE_THRESHOLD_PCT ?? 5);
-const minScoreToBuy = Number(process.env.DASHBOARD_MIN_SCORE_TO_BUY ?? 0.54);
+const maxPositions = Math.min(
+  Number(process.env.DASHBOARD_MAX_POSITIONS ?? productionConstraints.maxPositions),
+  productionConstraints.maxPositions,
+);
+const minHoldBars = Number(
+  process.env.DASHBOARD_MIN_HOLD_BARS ?? productionConstraints.minHoldingBars,
+);
+const rebalanceThresholdPct = Number(
+  process.env.DASHBOARD_REBALANCE_THRESHOLD_PCT ??
+    productionConstraints.rebalanceThresholdPct,
+);
+const configuredMinScoreToBuy = process.env.DASHBOARD_MIN_SCORE_TO_BUY;
 const shouldOptimize = process.env.DASHBOARD_OPTIMIZE === "1";
+const shouldWriteDiagnosticHistory =
+  process.env.DASHBOARD_WRITE_DIAGNOSTIC_HISTORY === "1";
 const strategyId = process.env.DASHBOARD_STRATEGY ?? "momentum-v1";
 const activeStrategy = getStrategy(strategyId) ?? getDefaultStrategy();
+const minScoreFor = (strategy: typeof activeStrategy) => Number(
+  configuredMinScoreToBuy ?? strategy.defaultMinScore,
+);
+const minScoreToBuy = minScoreFor(activeStrategy);
 const cacheDir = path.resolve(process.cwd(), process.env.DASHBOARD_CACHE ?? ".cache/datasource");
 const pyserverCacheDb = path.resolve(process.cwd(), process.env.PYSERVER_CACHE_DB ?? "../pyserver/cache.db");
 
@@ -260,13 +337,18 @@ function computeThemePerformance(
     positions[t.symbol] ??= { shares: 0, cost: 0 };
     if (t.side === "buy") {
       positions[t.symbol].shares += t.shares;
-      positions[t.symbol].cost += t.shares * t.price;
+      positions[t.symbol].cost += t.netCashFlowYuan !== undefined
+        ? -t.netCashFlowYuan
+        : t.shares * t.price;
     } else {
       const pos = positions[t.symbol];
       if (pos.shares > 0) {
         const avgCost = pos.cost / pos.shares;
         const sold = Math.min(t.shares, pos.shares);
-        realized[theme] += sold * (t.price - avgCost);
+        const netProceeds = t.netCashFlowYuan !== undefined
+          ? t.netCashFlowYuan * (sold / t.shares)
+          : sold * t.price;
+        realized[theme] += netProceeds - sold * avgCost;
         pos.cost -= sold * avgCost;
         pos.shares -= sold;
       }
@@ -317,6 +399,13 @@ function computeThemePerformance(
 }
 
 async function main() {
+  // A research winner is not deployable until an exact production inference
+  // adapter is registered here. The current race has no approved champion.
+  const productionGate = deriveProductionGateFromFiles(undefined, {
+    deployableChampionIds: [],
+  });
+  writeRuntimeJson(PRODUCTION_GATE_FILE, productionGate);
+
   const universe = loadStrategyEntries();
   console.log(`Loaded ${universe.length} universe entries`);
   console.log(`Strategy: ${activeStrategy.name} (${activeStrategy.codename}) [${activeStrategy.id}]`);
@@ -345,7 +434,7 @@ async function main() {
 
   const unifiedCost = toCostConfig();
   const cfg: BacktestConfig = {
-    startCash: 1_000_000,
+    startCash: productionConstraints.initialCapitalYuan,
     rebalanceEveryNDays: decisionEveryNDays,
     decisionEveryNDays,
     executionPrice: "next_open",
@@ -360,18 +449,19 @@ async function main() {
     sharpeTarget: 3,
     optimizationWindow: "post_cny_2026",
   };
-  const historicalSignalsByDate = Object.fromEntries(
-    readSignalHistorySnapshots(Number.POSITIVE_INFINITY)
+  const historicalSignalsFor = (id: string) => Object.fromEntries(
+    readSignalHistorySnapshots(Number.POSITIVE_INFINITY, id)
       .filter((snapshot) => snapshot.signal_date < endDate)
       .map((snapshot) => [snapshot.signal_date, snapshot.signals]),
   );
+  const historicalSignalsByDate = historicalSignalsFor(activeStrategy.id);
   // Fetch strategy-specific enhancement data (moneyflow/margin for Tide, index/breadth for Prism)
   const allSymbols = series.map((s) => s.entry.symbol);
-  const activeScorerData = await fetchStrategyScorerData(strategyId, allSymbols);
+  const activeScorerData = await fetchStrategyScorerData(strategyId, allSymbols, { startDate, endDate });
   const activeScorer = activeStrategy.createScorer({ minScoreToBuy, ...activeScorerData });
   const runOptions = {
     scorer: activeScorer,
-    historicalSignalsByDate: strategyId === "momentum-v1" ? historicalSignalsByDate : {},
+    historicalSignalsByDate,
   };
 
   const optimized = shouldOptimize
@@ -426,10 +516,14 @@ async function main() {
     optimizationWarnings: optimized.optimization?.warnings ?? [],
     optimizationCandidates: optimized.optimization?.candidates ?? [],
     researchStatus: readRuntimeJson<Record<string, unknown>>("ml/status.json"),
-    strategy_status: strategyId === "tide" && activeScorerData.moneyflowData === undefined
+    strategy_status: strategyId === "tide" && activeScorerData.moneyflowStatus === "unavailable"
       ? "suspended"
-      : strategyId === "prism" && activeScorerData.indexData === undefined
+      : strategyId === "tide" && activeScorerData.moneyflowStatus === "partial"
         ? "degraded"
+        : strategyId === "prism" && activeScorerData.regimeDataStatus === "unavailable"
+          ? "suspended"
+          : strategyId === "prism" && activeScorerData.regimeDataStatus === "partial"
+            ? "degraded"
         : "active",
   };
 
@@ -475,7 +569,27 @@ async function main() {
   };
   writeRuntimeJson("signals.json", signalsOutput);
   writeStrategyJson(activeStrategy.id, "signals.json", signalsOutput);
-  writeSignalHistorySnapshot(buildSignalHistorySnapshot(latestPlan, series), activeStrategy.id);
+  if (shouldWriteDiagnosticHistory) {
+    writeSignalHistorySnapshot(
+      buildSignalHistorySnapshot(latestPlan, series, activeStrategy.id),
+      activeStrategy.id,
+      { writeFlat: false },
+    );
+  }
+  if (productionGate.status !== "cash-only") {
+    throw new Error(
+      `production champion ${productionGate.champion_id ?? "unknown"} passed research gates but has no connected inference adapter`,
+    );
+  }
+  writeRuntimeJson(
+    PRODUCTION_SIGNALS_FILE,
+    buildCashOnlyProductionSignals(
+      productionGate,
+      latestPlan.decisionDate,
+      latestCompleteDate,
+      snapshotBasis,
+    ),
+  );
   writeRuntimeJson("meta.json", {
     generated_at: new Date().toISOString(),
     universe_count: activeUniverse.length,
@@ -483,27 +597,43 @@ async function main() {
 
   // --- Multi-strategy: run remaining strategies and write to per-strategy dirs ---
   const runAllStrategies = process.env.DASHBOARD_ALL_STRATEGIES === "1";
-  const strategySummaries: Array<{ id: string; name: string; stats: BacktestResult["stats"] }> = [
-    { id: activeStrategy.id, name: activeStrategy.name, stats: result.stats },
+  const strategySummaries: Array<{
+    id: string;
+    name: string;
+    minScoreToBuy: number;
+    stats: BacktestResult["stats"];
+  }> = [
+    { id: activeStrategy.id, name: activeStrategy.name, minScoreToBuy, stats: result.stats },
   ];
 
   if (runAllStrategies) {
     for (const strategy of STRATEGIES) {
       if (strategy.id === activeStrategy.id) continue;
       console.log(`\n--- Running strategy: ${strategy.name} (${strategy.codename}) [${strategy.id}] ---`);
-      const stratScorerData = await fetchStrategyScorerData(strategy.id, allSymbols);
-      const stratScorer = strategy.createScorer({ minScoreToBuy, ...stratScorerData });
+      const strategyMinScoreToBuy = minScoreFor(strategy);
+      const stratScorerData = await fetchStrategyScorerData(
+        strategy.id,
+        allSymbols,
+        { startDate, endDate },
+      );
+      const stratScorer = strategy.createScorer({
+        minScoreToBuy: strategyMinScoreToBuy,
+        ...stratScorerData,
+      });
       const stratResult = await runBacktest(series, cfg, {
         scorer: stratScorer,
-        historicalSignalsByDate: strategy.id === "momentum-v1" ? historicalSignalsByDate : {},
+        historicalSignalsByDate: historicalSignalsFor(strategy.id),
       });
       const stratBenchmarkCurve = computeBenchmarkCurve(benchmark, stratResult.config);
       const stratLastBar = stratResult.equityCurve[stratResult.equityCurve.length - 1];
       const stratPlan = await buildLatestPlan(series, {
         decisionDate: stratLastBar.date,
-        scorer: strategy.createScorer({ minScoreToBuy, ...stratScorerData }),
+        scorer: strategy.createScorer({
+          minScoreToBuy: strategyMinScoreToBuy,
+          ...stratScorerData,
+        }),
         maxPositions: stratResult.config.maxPositions,
-        minScoreToBuy,
+        minScoreToBuy: strategyMinScoreToBuy,
       });
       const stratOutput: DashboardOutput = {
         generated_at: new Date().toISOString(),
@@ -526,15 +656,19 @@ async function main() {
           maxPositions: stratResult.config.maxPositions,
           minHoldBars: stratResult.config.minHoldBars ?? 0,
           rebalanceThresholdPct: stratResult.config.rebalanceThresholdPct ?? 0,
-          minScoreToBuy,
+          minScoreToBuy: strategyMinScoreToBuy,
         },
         optimizationWarnings: [],
         optimizationCandidates: [],
         researchStatus: null,
-        strategy_status: strategy.id === "tide" && stratScorerData.moneyflowData === undefined
+        strategy_status: strategy.id === "tide" && stratScorerData.moneyflowStatus === "unavailable"
           ? "suspended"
-          : strategy.id === "prism" && stratScorerData.indexData === undefined
+          : strategy.id === "tide" && stratScorerData.moneyflowStatus === "partial"
             ? "degraded"
+            : strategy.id === "prism" && stratScorerData.regimeDataStatus === "unavailable"
+              ? "suspended"
+              : strategy.id === "prism" && stratScorerData.regimeDataStatus === "partial"
+                ? "degraded"
             : "active",
       };
       writeStrategyJson(strategy.id, "backtest.json", stratOutput);
@@ -552,8 +686,19 @@ async function main() {
         signals: stratPlan.signals,
       };
       writeStrategyJson(strategy.id, "signals.json", stratSignals);
-      writeSignalHistorySnapshot(buildSignalHistorySnapshot(stratPlan, series), strategy.id);
-      strategySummaries.push({ id: strategy.id, name: strategy.name, stats: stratResult.stats });
+      if (shouldWriteDiagnosticHistory) {
+        writeSignalHistorySnapshot(
+          buildSignalHistorySnapshot(stratPlan, series, strategy.id),
+          strategy.id,
+          { writeFlat: false },
+        );
+      }
+      strategySummaries.push({
+        id: strategy.id,
+        name: strategy.name,
+        minScoreToBuy: strategyMinScoreToBuy,
+        stats: stratResult.stats,
+      });
       console.log(
         `  Return: ${stratResult.stats.totalReturnPct.toFixed(2)}%  ` +
           `Sharpe: ${stratResult.stats.sharpe.toFixed(2)}  ` +
@@ -593,9 +738,8 @@ async function main() {
 
   // Compute per-strategy file SHA-256 and parameter versions
   const manifestStrategies = strategySummaries.map((s) => {
-    const stratMeta = getStrategy(s.id);
     const params = {
-      minScoreToBuy: stratMeta?.defaultMinScore ?? minScoreToBuy,
+      minScoreToBuy: s.minScoreToBuy,
       maxPositions,
       minHoldBars,
       rebalanceThresholdPct,
@@ -620,10 +764,22 @@ async function main() {
     snapshot_basis: snapshotBasis,
     strategies: manifestStrategies,
     cost_model: "config/cost-model.json",
+    production_gate: {
+      status: productionGate.status,
+      champion_id: productionGate.champion_id,
+      contract_sha256: productionGate.contract_sha256,
+      minute_coverage_pct: productionGate.minute_coverage_pct,
+      reason_codes: productionGate.reason_codes,
+    },
   });
 
   assertRuntimeArtifacts(readRuntimeValidationInput());
+  assertProductionRuntimeArtifacts(readProductionRuntimeValidationInput());
   console.log("Wrote runtime backtest/signals/history/meta to web/data/runtime");
+  console.log(
+    `Production gate: ${productionGate.status}, champion=${productionGate.champion_id ?? "none"}, ` +
+      `reasons=${productionGate.reason_codes.join(",") || "none"}`,
+  );
   console.log(
     `Latest plan: ${latestPlan.decisionDate} ${snapshotLabel} -> next open, ` +
       `${latestPlan.signals.filter((s) => s.action === "buy").length} buys`,

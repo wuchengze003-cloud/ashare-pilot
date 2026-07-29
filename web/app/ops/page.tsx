@@ -2,8 +2,17 @@ import Link from "next/link";
 import fs from "node:fs";
 import path from "node:path";
 import { cookies, headers } from "next/headers";
+import {
+  readProductionGate,
+  readProductionSignals,
+} from "@/lib/productionGate";
+import {
+  dailyCloseReceiptMatchesProduction,
+  type DailyCloseProductionReceipt,
+} from "@/lib/dailyClose";
 import { readRuntimeJson, readStrategyJson } from "@/lib/runtimeData";
 import { STRATEGIES } from "@/lib/strategyRegistry";
+import { hasOpsPageAccess } from "@/lib/apiSecurity";
 import type { DashboardData } from "../dashboard/types";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +38,7 @@ interface DailyCloseHealth {
   error?: string;
   local?: { pyserver_url: string; web_url: string };
   remote?: { base_url: string };
+  production?: DailyCloseProductionReceipt;
 }
 
 interface AgentRunResult {
@@ -46,15 +56,12 @@ function pct(v: number, digits = 2) {
 }
 
 async function checkAuth(): Promise<boolean> {
-  const token = process.env.OPS_TOKEN;
-  if (!token) return true; // No token configured = open access (for dev)
   const cookieStore = await cookies();
-  const cookieToken = cookieStore.get("ops_token")?.value;
-  if (cookieToken === token) return true;
   const headerStore = await headers();
-  const authHeader = headerStore.get("authorization");
-  if (authHeader === `Bearer ${token}`) return true;
-  return false;
+  return hasOpsPageAccess(
+    new Headers(headerStore),
+    cookieStore.get("ops_token")?.value ?? null,
+  );
 }
 
 export default async function OpsPage() {
@@ -83,6 +90,16 @@ export default async function OpsPage() {
 
   const manifest = readRuntimeJson<RuntimeManifest>("manifest.json");
   const health = readRuntimeJson<DailyCloseHealth>("daily-close-health.json");
+  const productionGate = readProductionGate();
+  const productionSignals = readProductionSignals();
+  const minuteRequired = productionGate.candidates.some(
+    (candidate) => candidate.signal_frequency === "1d+5min",
+  );
+  const healthMatchesProduction = dailyCloseReceiptMatchesProduction(
+    health?.production,
+    productionGate,
+    productionSignals,
+  );
 
   // Read agent dispatch run results from ops/agents/runtime/
   const agentRunDir = path.resolve(process.cwd(), "..", "ops", "agents", "runtime");
@@ -121,6 +138,52 @@ export default async function OpsPage() {
           <p>模型注册、数据源状态、晋级评估、运行目录。</p>
         </div>
       </header>
+
+      <h2 className="subheading">生产准入</h2>
+      <div className="card" style={{ marginTop: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>
+          <div style={{ padding: 16 }}>
+            <span className="muted" style={{ fontSize: 12 }}>生产状态</span>
+            <div style={{ marginTop: 5 }}>
+              <span className={`pill ${productionGate.status === "active" ? "good" : "bad"}`}>
+                {productionGate.status}
+              </span>
+            </div>
+          </div>
+          <div style={{ padding: 16 }}>
+            <span className="muted" style={{ fontSize: 12 }}>唯一冠军</span>
+            <div className="mono" style={{ marginTop: 5 }}>{productionGate.champion_id ?? "none"}</div>
+          </div>
+          <div style={{ padding: 16 }}>
+            <span className="muted" style={{ fontSize: 12 }}>分钟执行数据</span>
+            <div style={{ marginTop: 5 }}>
+              {!minuteRequired
+                ? "本轮不需要"
+                : productionGate.minute_coverage_pct == null
+                  ? "unknown"
+                  : `${productionGate.minute_coverage_pct.toFixed(2)}%`}
+            </div>
+          </div>
+          <div style={{ padding: 16 }}>
+            <span className="muted" style={{ fontSize: 12 }}>生产信号日</span>
+            <div style={{ marginTop: 5 }}>{productionSignals?.signal_date ?? "missing"}</div>
+          </div>
+        </div>
+        <div style={{ padding: "0 16px 16px" }}>
+          <p>{productionGate.message}</p>
+          <div className="mono muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
+            contract={productionGate.contract_sha256 ?? "none"}
+            <br />
+            daily={productionGate.daily_status ?? "missing"} · minute={
+              minuteRequired
+                ? productionGate.minute_status ?? "missing"
+                : "not-required"
+            }
+            <br />
+            reasons={productionGate.reason_codes.join(",") || "none"}
+          </div>
+        </div>
+      </div>
 
       {/* Version info */}
       <h2 className="subheading">版本信息</h2>
@@ -163,13 +226,18 @@ export default async function OpsPage() {
         {health ? (
           <>
             <div style={{ display: "flex", gap: 16, padding: "12px 16px", alignItems: "center" }}>
-              <span className={`pill ${health.status === "passed" ? "good" : health.status === "stale-or-no-session" ? "" : "bad"}`}>
-                {health.status}
+              <span className={`pill ${healthMatchesProduction && health.status === "passed" ? "good" : health.status === "failed" ? "bad" : ""}`}>
+                {healthMatchesProduction ? health.status : "historical"}
               </span>
               <span>预期日期：{health.expected_market_date}</span>
               <span>最新行情：{health.latest_market_date ?? "unknown"}</span>
               <span>生成时间：{new Date(health.generated_at).toLocaleString("zh-CN")}</span>
             </div>
+            {!healthMatchesProduction && (
+              <div className="warning-strip" style={{ margin: "0 16px" }}>
+                该记录未绑定当前生产门禁与信号快照，只保留为历史执行日志，不能证明当前生产链路通过。
+              </div>
+            )}
             {health.error && (
               <div className="warning-strip" style={{ margin: "0 16px" }}>
                 {health.error}
@@ -191,7 +259,7 @@ export default async function OpsPage() {
                       <tr key={i}>
                         <td>{step.name}</td>
                         <td>
-                          <span className={`pill ${step.status === "passed" ? "good" : step.status === "skipped" ? "" : "bad"}`}>
+                          <span className={`pill ${healthMatchesProduction && step.status === "passed" ? "good" : step.status === "failed" ? "bad" : ""}`}>
                             {step.status}
                           </span>
                         </td>
@@ -210,7 +278,7 @@ export default async function OpsPage() {
       </div>
 
       {/* Model registration & promotion status */}
-      <h2 className="subheading">模型注册与晋级状态</h2>
+      <h2 className="subheading">旧版模型与历史晋级记录</h2>
       <div className="card" style={{ marginTop: 8 }}>
         {strategyData.map(({ meta, data }) => {
           const research = data?.researchStatus;
@@ -220,9 +288,7 @@ export default async function OpsPage() {
               <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 8 }}>
                 <strong>{meta.name}</strong>
                 <span className="mono muted">{meta.codename}</span>
-                <span className={`pill ${research?.production_strategy === "ml-champion" ? "good" : ""}`}>
-                  {research?.production_strategy ?? "v1-rule"}
-                </span>
+                <span className="pill">legacy-diagnostic</span>
                 {research?.activation_pending && (
                   <span className="pill">待激活：{research.activation_pending}</span>
                 )}
@@ -251,7 +317,7 @@ export default async function OpsPage() {
       </div>
 
       {/* Data source status */}
-      <h2 className="subheading">数据源状态</h2>
+      <h2 className="subheading">旧版研究数据状态</h2>
       <div className="card" style={{ marginTop: 8 }}>
         {strategyData.map(({ meta, data }) => {
           const research = data?.researchStatus;
@@ -260,7 +326,7 @@ export default async function OpsPage() {
               <strong>{meta.name}</strong>
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13, color: "var(--muted)", marginTop: 4 }}>
                 <span className={research?.tushare_production?.passed ? "pos" : "neg"}>
-                  Tushare 生产数据：{research?.tushare_production?.passed
+                  Tushare 旧版研究数据：{research?.tushare_production?.passed
                     ? `通过 · ${research.tushare_production.data_cutoff ?? "截止日未知"} · ${research.tushare_production.trading_days ?? 0} 日`
                     : `未通过${research?.tushare_production?.error ? ` · ${research.tushare_production.error}` : ""}`}
                 </span>

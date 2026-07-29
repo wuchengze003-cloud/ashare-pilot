@@ -18,6 +18,7 @@ export interface PriceRow {
   low: number;
   close: number;
   volume: number;
+  amount?: number;
   ticker: string;
   name?: string;
 }
@@ -69,6 +70,7 @@ export function parsePriceCsv(content: string): PriceRow[] {
     low: headers.indexOf("low"),
     close: headers.indexOf("close"),
     volume: headers.indexOf("volume"),
+    amount: headers.indexOf("amount"),
     ticker: headers.indexOf("thscode"),
     time: headers.indexOf("time"),
     name: headers.indexOf("thsname_cn"),
@@ -88,6 +90,7 @@ export function parsePriceCsv(content: string): PriceRow[] {
       low: parseNumber(cols[idx.low]) ?? 0,
       close: parseNumber(cols[idx.close]) ?? 0,
       volume: parseNumber(cols[idx.volume]) ?? 0,
+      amount: idx.amount >= 0 ? parseNumber(cols[idx.amount]) ?? undefined : undefined,
       ticker: cols[idx.ticker]?.trim() ?? "",
       name: cols[idx.name]?.trim() || undefined,
     });
@@ -269,6 +272,7 @@ export function buildSymbolSeries(
       low: r.low,
       close: r.close,
       volume: r.volume,
+      amount: r.amount,
     }));
     series.push({
       entry,
@@ -308,6 +312,7 @@ export function buildSymbolSeriesFromPyserverCache(
           low: number;
           close: number;
           volume: number;
+          amount?: number;
         }>;
         try {
           payload = JSON.parse(cacheRow.payload);
@@ -333,6 +338,7 @@ export function buildSymbolSeriesFromPyserverCache(
               low: r.low,
               close: r.close,
               volume: r.volume,
+              amount: r.amount,
               ticker: toDataSourceTicker(symbol),
             },
           });
@@ -358,6 +364,7 @@ export function buildSymbolSeriesFromPyserverCache(
         low: r.low,
         close: r.close,
         volume: r.volume,
+        amount: r.amount,
       }));
       series.push({ entry, klines });
     }

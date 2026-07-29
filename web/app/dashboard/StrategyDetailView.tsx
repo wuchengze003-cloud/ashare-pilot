@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { readProductionGate } from "@/lib/productionGate";
 import { readRuntimeJson, readStrategyJson } from "@/lib/runtimeData";
 import { readSignalHistorySnapshots } from "@/lib/signalHistory";
 import { buildBuySignalHistoryRows } from "@/lib/buySignalHistory";
@@ -26,9 +27,9 @@ function pctOrDash(v: number | null | undefined, digits = 1) {
 }
 
 function sideLabel(side: "buy" | "sell" | "reduce") {
-  if (side === "buy") return "买入";
-  if (side === "reduce") return "减仓";
-  return "卖出";
+  if (side === "buy") return "模拟买入";
+  if (side === "reduce") return "模拟减仓";
+  return "模拟卖出";
 }
 
 function shadowActionLabel(action: "buy" | "hold" | "sell" | "cash") {
@@ -45,6 +46,10 @@ export interface StrategyDetailViewProps {
 }
 
 export function StrategyDetailView({ data, strategyId, strategyMeta }: StrategyDetailViewProps) {
+  const productionGate = readProductionGate();
+  const isProductionChampion =
+    productionGate.status === "active" &&
+    productionGate.champion_id === strategyId;
   const universe = loadEntries();
   const analyst = readRuntimeJson<{
     items?: Array<{ symbol: string; current_price?: number | null; current_price_as_of?: string | null }>;
@@ -113,7 +118,9 @@ export function StrategyDetailView({ data, strategyId, strategyMeta }: StrategyD
       }))
     : [];
   const decisionBasisLabel = data?.snapshot_basis === "intraday-midday" ? "午盘快照决策" : "收盘决策";
-  const targetBuys = data?.latestPlan?.signals.filter((s) => s.action === "buy" && s.size > 0) ?? [];
+  const targetBuys = isProductionChampion
+    ? data?.latestPlan?.signals.filter((s) => s.action === "buy" && s.size > 0) ?? []
+    : [];
   const signalMap = new Map((data?.latestPlan?.signals ?? []).map((s) => [s.symbol, s]));
   const plannedHoldings = holdings
     .map((h) => ({
@@ -142,7 +149,9 @@ export function StrategyDetailView({ data, strategyId, strategyMeta }: StrategyD
       targetWeight: s.size,
       reason: cashWeight < s.size ? `现金不足，需先卖出释放仓位；${s.rationale}` : s.rationale,
     }));
-  const plannedOrders = [...plannedHoldings, ...plannedBuys];
+  const plannedOrders = isProductionChampion
+    ? [...plannedHoldings, ...plannedBuys]
+    : [];
   const buySignalHistory = buildBuySignalHistoryRows(
     history,
     currentPriceBySymbol,
@@ -162,11 +171,11 @@ export function StrategyDetailView({ data, strategyId, strategyMeta }: StrategyD
       </div>
       <header className="page-header compact">
         <div>
-          <div className="eyebrow">Dashboard · {meta?.codename ?? strategyId}</div>
-          <h1>{meta?.name ?? strategyId} 策略详情</h1>
+          <div className="eyebrow">Research Diagnostics · {meta?.codename ?? strategyId}</div>
+          <h1>{meta?.name ?? strategyId} 诊断详情</h1>
           <p>
             {data?.strategy
-              ? `${data.strategy.name} (${data.strategy.codename}) — ${data.strategy.description}`
+              ? `${data.strategy.name} (${data.strategy.codename}) — ${data.strategy.description}。该模型未上线，仅用于研究诊断。`
               : meta
                 ? `${meta.name} (${meta.codename}) — ${meta.description}`
                 : "基于项目股票池的可复现规则回测。数据来自本地行情侧车缓存，信号按当前运行快照生成。"}
@@ -196,6 +205,13 @@ export function StrategyDetailView({ data, strategyId, strategyMeta }: StrategyD
           </div>
         </div>
       </header>
+
+      {!isProductionChampion && (
+        <div className="warning-strip">
+          当前模型不是生产冠军。下方权益、持仓、交易和历史信号均为模拟诊断，
+          不会进入生产信号接口。
+        </div>
+      )}
 
       {!data && (
         <div className="card" style={{ borderColor: "var(--warn)" }}>
@@ -238,7 +254,7 @@ export function StrategyDetailView({ data, strategyId, strategyMeta }: StrategyD
             <span>·</span>
             <span>{snapshotLabel}</span>
             <span>·</span>
-            <span>最大持仓 {data.config.maxPositions} 只</span>
+            <span>模拟最大持仓 {data.config.maxPositions} 只</span>
             <span>·</span>
             <span>手续费 {data.config.feeBps} bps</span>
             <span>·</span>
@@ -262,7 +278,7 @@ export function StrategyDetailView({ data, strategyId, strategyMeta }: StrategyD
           <h2 className="subheading">模型状态</h2>
           <div className="theme-panel">
             <div className="theme-title">
-              <strong>{championModel ? "ML 正式策略" : "V1 正式策略"} / ML 影子策略</strong>
+              <strong>{championModel ? "旧版 ML 模拟" : "旧版规则模拟"} / ML 影子研究</strong>
               <span>
                 {shadowModel
                   ? `${shadowModel.model_version} · 影子，不参与交易`
@@ -273,7 +289,7 @@ export function StrategyDetailView({ data, strategyId, strategyMeta }: StrategyD
             </div>
             <div className="model-status-grid">
               <span>
-                生产策略：{researchStatus?.production_strategy === "ml-champion" ? "ML 正式模型" : "V1 规则"}
+                旧链路标记：{researchStatus?.production_strategy === "ml-champion" ? "ML 模型" : "V1 规则"}
               </span>
               <span>
                 候选模型：{researchStatus?.challenger_models?.length ?? 0}
@@ -290,7 +306,7 @@ export function StrategyDetailView({ data, strategyId, strategyMeta }: StrategyD
                 </span>
               ) : null}
               <span className={researchStatus?.tushare_production?.passed ? "pos" : "neg"}>
-                生产研究数据：{researchStatus?.tushare_production?.passed
+                旧版研究数据：{researchStatus?.tushare_production?.passed
                   ? `通过 · ${researchStatus.tushare_production.data_cutoff ?? "截止日未知"} · ${researchStatus.tushare_production.trading_days ?? 0} 日`
                   : "未通过"}
               </span>
@@ -343,8 +359,8 @@ export function StrategyDetailView({ data, strategyId, strategyMeta }: StrategyD
             {!shadowModel ? (
               <p className="muted" style={{ padding: "12px 16px", margin: 0 }}>
                 {championModel
-                  ? `当前交易计划由 ${championModel.model_version} 生成，暂无新的影子挑战模型。`
-                  : "当前买卖、持仓和回测仍全部由 V1 规则生成。研究模型完成训练和影子验证后才会在此显示。"}
+                  ? `当前诊断计划由 ${championModel.model_version} 生成，暂无新的影子挑战模型。`
+                  : "当前仓位和回测由旧版 V1 规则生成，仅用于诊断。生产端由独立准入门禁控制。"}
               </p>
             ) : (
               <div className="table-wrap compact-table">
@@ -446,8 +462,8 @@ export function StrategyDetailView({ data, strategyId, strategyMeta }: StrategyD
 
             <div className="theme-panel">
               <div className="theme-title">
-                <strong>明日目标信号</strong>
-                <span>{data.latestPlan?.decisionDate ?? data.latestDate} 收盘信号 · 现金 {((cashWeight || 0) * 100).toFixed(1)}%</span>
+                <strong>{isProductionChampion ? "下一交易日生产信号" : "下一交易日诊断模拟"}</strong>
+                <span>{data.latestPlan?.decisionDate ?? data.latestDate} · 现金 {((cashWeight || 0) * 100).toFixed(1)}%</span>
               </div>
               <div className="table-wrap compact-table">
                 <table className="plan-table">
@@ -462,7 +478,11 @@ export function StrategyDetailView({ data, strategyId, strategyMeta }: StrategyD
                   </thead>
                   <tbody>
                     {plannedOrders.length === 0 && (
-                      <tr><td colSpan={5} className="muted">暂无待执行换仓</td></tr>
+                      <tr>
+                        <td colSpan={5} className="muted">
+                          {isProductionChampion ? "暂无待执行换仓" : "未上线模型不发布目标仓位"}
+                        </td>
+                      </tr>
                     )}
                     {plannedOrders.map((order) => (
                       <tr key={`${order.side}-${order.symbol}`}>
@@ -479,11 +499,11 @@ export function StrategyDetailView({ data, strategyId, strategyMeta }: StrategyD
             </div>
 
             <div className="theme-panel recent-trades-panel">
-              <div className="theme-title"><strong>最近交易</strong><span>近 10 / 共 {data.trades.length} 笔</span></div>
+              <div className="theme-title"><strong>最近模拟交易</strong><span>近 10 / 共 {data.trades.length} 笔</span></div>
               <div className="table-wrap compact-table">
                 <table className="recent-table">
                   <thead>
-                    <tr><th>决策日</th><th>成交日</th><th>代码</th><th>方向</th><th className="num">数量</th><th className="num">价格</th></tr>
+                    <tr><th>决策日</th><th>模拟成交日</th><th>代码</th><th>模拟方向</th><th className="num">数量</th><th className="num">价格</th></tr>
                   </thead>
                   <tbody>
                     {data.trades.slice(-10).reverse().map((t, i) => (
@@ -538,7 +558,7 @@ export function StrategyDetailView({ data, strategyId, strategyMeta }: StrategyD
             </div>
           </div>
 
-          <h2 className="subheading">完整历史买入信号表现</h2>
+          <h2 className="subheading">完整历史模拟买入信号表现</h2>
           <BuySignalHistoryTable
             rows={buySignalHistory}
             archiveDates={history.map((snapshot) => snapshot.signal_date)}

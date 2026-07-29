@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   hasConfiguredTokenAccess,
   hasInternalApiAccess,
+  hasOpsPageAccess,
   isAshareSymbol,
   isIsoDateString,
   parseAshareSymbols,
@@ -43,6 +44,34 @@ test("hasConfiguredTokenAccess fails closed and matches exactly", () => {
   assert.equal(hasConfiguredTokenAccess("Secret", "secret"), false);
   assert.equal(hasConfiguredTokenAccess("secret2", "secret"), false);
   assert.equal(hasConfiguredTokenAccess("sec", "secret"), false);
+});
+
+test("ops page is local-only in development and fail-closed in production", () => {
+  assert.equal(
+    hasOpsPageAccess(new Headers({ host: "127.0.0.1:3100" }), null, undefined, "development"),
+    true,
+  );
+  assert.equal(
+    hasOpsPageAccess(new Headers({ host: "example.com" }), null, undefined, "development"),
+    false,
+  );
+  assert.equal(
+    hasOpsPageAccess(new Headers({ host: "127.0.0.1:3100" }), null, undefined, "production"),
+    false,
+  );
+  assert.equal(
+    hasOpsPageAccess(
+      new Headers({ host: "example.com", authorization: "Bearer correct" }),
+      null,
+      "correct",
+      "production",
+    ),
+    true,
+  );
+  assert.equal(
+    hasOpsPageAccess(new Headers({ host: "example.com" }), "correct", "correct", "production"),
+    true,
+  );
 });
 
 test("isIsoDateString rejects malformed and impossible dates", () => {

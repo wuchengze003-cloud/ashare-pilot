@@ -34,3 +34,4 @@ web/data/runtime/signals-history/*.json
 # Local personal monitoring state and generated review artifacts.
 /monitoring/
 /tmp/
+/output/

@@ -80,6 +80,27 @@ export function hasInternalApiAccess(
   return Boolean(provided && sameSecret(provided, configuredToken));
 }
 
+export function hasOpsPageAccess(
+  headers: Headers,
+  cookieToken: string | null,
+  configuredToken = process.env.OPS_TOKEN,
+  nodeEnv = process.env.NODE_ENV,
+): boolean {
+  if (!configuredToken) {
+    if (nodeEnv === "production") return false;
+    const host = (headers.get("host") ?? "").toLowerCase();
+    return /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(host);
+  }
+  const authorization = headers.get("authorization");
+  const bearerToken = authorization?.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length)
+    : null;
+  return (
+    hasConfiguredTokenAccess(cookieToken, configuredToken) ||
+    hasConfiguredTokenAccess(bearerToken, configuredToken)
+  );
+}
+
 export function internalApiDeniedResponse(): Response {
   return Response.json(
     { error: "This operation is available only to the internal update workflow." },

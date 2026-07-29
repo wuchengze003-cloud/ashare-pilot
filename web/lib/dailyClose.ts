@@ -1,4 +1,13 @@
 import type { RuntimeBacktestSnapshot, RuntimeMetaSnapshot, RuntimeSignalsSnapshot } from "./runtimeValidation";
+import {
+  validateProductionRuntimeArtifacts,
+  type ProductionRuntimeValidationInput,
+} from "./runtimeValidation";
+import type {
+  ProductionGateSnapshot,
+  ProductionGateStatus,
+  ProductionSignalsSnapshot,
+} from "./productionGate";
 
 export interface MarketSeriesCoverage {
   symbol: string;
@@ -22,12 +31,83 @@ export interface DailyCloseValidationInput {
   backtest: RuntimeBacktestSnapshot | null;
   signals: RuntimeSignalsSnapshot | null;
   meta: RuntimeMetaSnapshot | null;
+  production: ProductionRuntimeValidationInput;
   analystItems: AnalystCoverageItem[];
 }
 
 export interface DailyCloseValidationIssue {
   code: string;
   message: string;
+}
+
+export interface SignalsEndpointBody {
+  status?: ProductionGateStatus;
+  champion_id?: string | null;
+  signal_date?: string | null;
+  latest_complete_date?: string | null;
+  signals?: unknown[];
+}
+
+export interface DailyCloseProductionReceipt {
+  gate_generated_at: string;
+  signals_generated_at: string;
+  contract_sha256: string | null;
+  status: ProductionGateStatus;
+  champion_id: string | null;
+  signal_date: string;
+  latest_complete_date: string;
+  signal_count: number;
+}
+
+export function buildDailyCloseProductionReceipt(
+  input: ProductionRuntimeValidationInput,
+): DailyCloseProductionReceipt | null {
+  const { gate, signals } = input;
+  if (!gate || !signals) return null;
+  return {
+    gate_generated_at: gate.generated_at,
+    signals_generated_at: signals.generated_at,
+    contract_sha256: gate.contract_sha256,
+    status: gate.status,
+    champion_id: gate.champion_id,
+    signal_date: signals.signal_date,
+    latest_complete_date: signals.latest_complete_date,
+    signal_count: signals.signals.length,
+  };
+}
+
+export function dailyCloseReceiptMatchesProduction(
+  receipt: DailyCloseProductionReceipt | null | undefined,
+  gate: ProductionGateSnapshot,
+  signals: ProductionSignalsSnapshot | null,
+): boolean {
+  return Boolean(
+    receipt &&
+      signals &&
+      receipt.gate_generated_at === gate.generated_at &&
+      receipt.signals_generated_at === signals.generated_at &&
+      receipt.contract_sha256 === gate.contract_sha256 &&
+      receipt.status === gate.status &&
+      receipt.champion_id === gate.champion_id &&
+      receipt.signal_date === signals.signal_date &&
+      receipt.latest_complete_date === signals.latest_complete_date &&
+      receipt.signal_count === signals.signals.length,
+  );
+}
+
+export function isShortHistoryStrategySeries(
+  entry: { strategy_from?: string },
+  expectedDate: string,
+  coverage: { latestDate?: string; uniqueDates: number },
+  minBars = 30,
+): boolean {
+  return Boolean(
+    entry.strategy_from &&
+      entry.strategy_from <= expectedDate &&
+      coverage.latestDate === expectedDate &&
+      coverage.uniqueDates > 0 &&
+      coverage.uniqueDates < minBars,
+  );
 }
 
 export function shanghaiDateTimeParts(now = new Date()): {
@@ -54,6 +134,49 @@ export function shanghaiDateTimeParts(now = new Date()): {
 
 export function parseSymbolList(value?: string): string[] {
   return [...new Set((value ?? "").split(",").map((item) => item.trim()).filter(Boolean))];
+}
+
+export function validateSignalsEndpointBody(
+  body: SignalsEndpointBody,
+  expectedDate: string,
+): DailyCloseValidationIssue[] {
+  const issues: DailyCloseValidationIssue[] = [];
+  if (
+    body.signal_date !== expectedDate ||
+    body.latest_complete_date !== expectedDate
+  ) {
+    issues.push({
+      code: "PRODUCTION_ENDPOINT_DATE_MISMATCH",
+      message: `signal=${body.signal_date ?? "missing"}, complete=${body.latest_complete_date ?? "missing"}, expected=${expectedDate}`,
+    });
+  }
+  if (body.status !== "active" && body.status !== "cash-only") {
+    issues.push({
+      code: "PRODUCTION_ENDPOINT_STATUS_INVALID",
+      message: `status=${body.status ?? "missing"}`,
+    });
+  } else if (body.status === "cash-only") {
+    if (body.champion_id != null) {
+      issues.push({
+        code: "PRODUCTION_ENDPOINT_CASH_HAS_CHAMPION",
+        message: `cash-only endpoint champion=${body.champion_id}`,
+      });
+    }
+    if ((body.signals?.length ?? 0) > 0) {
+      issues.push({
+        code: "PRODUCTION_ENDPOINT_CASH_HAS_SIGNALS",
+        message: `cash-only endpoint signals=${body.signals?.length ?? 0}`,
+      });
+    }
+  } else {
+    if (!body.champion_id) {
+      issues.push({
+        code: "PRODUCTION_ENDPOINT_CHAMPION_MISSING",
+        message: "active endpoint has no champion",
+      });
+    }
+  }
+  return issues;
 }
 
 export function validateDailyCloseData(input: DailyCloseValidationInput): DailyCloseValidationIssue[] {
@@ -126,6 +249,27 @@ export function validateDailyCloseData(input: DailyCloseValidationInput): DailyC
     issues.push({
       code: "META_UNIVERSE_COUNT_MISMATCH",
       message: `meta universe=${input.meta?.universe_count ?? "missing"}, expected=${input.expectedUniverseCount}`,
+    });
+  }
+
+  issues.push(
+    ...validateProductionRuntimeArtifacts(input.production).map((issue) => ({
+      code: issue.code,
+      message: issue.message,
+    })),
+  );
+  const productionSignals: ProductionSignalsSnapshot | null =
+    input.production.signals;
+  if (
+    productionSignals &&
+    (
+      productionSignals.signal_date !== input.expectedDate ||
+      productionSignals.latest_complete_date !== input.expectedDate
+    )
+  ) {
+    issues.push({
+      code: "PRODUCTION_SIGNAL_DATE_MISMATCH",
+      message: `signal=${productionSignals.signal_date}, complete=${productionSignals.latest_complete_date}, expected=${input.expectedDate}`,
     });
   }
 

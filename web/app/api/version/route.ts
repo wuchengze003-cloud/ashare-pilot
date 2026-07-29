@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readProductionGate } from "@/lib/productionGate";
 import { readRuntimeJson } from "@/lib/runtimeData";
 
 export const dynamic = "force-dynamic";
@@ -17,10 +18,18 @@ interface RuntimeManifest {
     file_sha256?: Record<string, string>;
   }>;
   cost_model?: string;
+  production_gate?: {
+    status?: string;
+    champion_id?: string | null;
+    contract_sha256?: string | null;
+    minute_coverage_pct?: number | null;
+    reason_codes?: string[];
+  };
 }
 
 export async function GET() {
   const manifest = readRuntimeJson<RuntimeManifest>("manifest.json");
+  const productionGate = readProductionGate();
 
   if (!manifest) {
     return NextResponse.json(
@@ -29,6 +38,7 @@ export async function GET() {
         dataDate: null,
         universeSha: null,
         runtimeManifest: null,
+        productionGate,
         error: "manifest.json not found — dashboard has not been generated yet",
       },
       { status: 200 },
@@ -44,6 +54,8 @@ export async function GET() {
       snapshotBasis: manifest.snapshot_basis ?? null,
       strategies: manifest.strategies ?? [],
       costModel: manifest.cost_model ?? null,
+      productionGate: manifest.production_gate ?? null,
     },
+    productionGate,
   });
 }

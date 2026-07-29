@@ -57,6 +57,12 @@ run("rsync", [
   "web",
   `${deployHost}:${releasePath}/`,
 ]);
+run("rsync", [
+  "-az",
+  "--delete",
+  "config",
+  `${deployHost}:${releasePath}/`,
+]);
 
 run("ssh", [
   deployHost,

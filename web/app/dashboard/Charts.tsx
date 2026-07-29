@@ -34,7 +34,7 @@ export function EquityChart({ data }: { data: EquityPoint[] }) {
           contentStyle={{ background: "#131a26", border: "1px solid #1f2937" }}
           formatter={(v) => (typeof v === "number" ? fmtMoney(v) : "数据未覆盖")}
         />
-        <Line type="monotone" dataKey="equity" stroke="#7cf0a0" dot={false} strokeWidth={2} name="V1 正式策略" />
+        <Line type="monotone" dataKey="equity" stroke="#7cf0a0" dot={false} strokeWidth={2} name="规则诊断" />
         <Line type="monotone" dataKey="benchmark" stroke="#f2b84b" dot={false} strokeWidth={2} name="沪深300" />
         {data.some((point) => point.shadow != null) ? (
           <Line type="monotone" dataKey="shadow" stroke="#63a1ff" dot={false} strokeWidth={2} name="ML 影子仓" />

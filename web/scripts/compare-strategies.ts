@@ -14,6 +14,7 @@ import {
 import { runBacktest, type BacktestConfig } from "../lib/backtest";
 import { STRATEGIES } from "../lib/strategyRegistry";
 import { toCostConfig, roundTripBps } from "../lib/costConfig";
+import { loadTradingConstraints } from "../lib/tradingConstraints";
 import {
   buildSymbolSeries,
   buildSymbolSeriesFromPyserverCache,
@@ -50,8 +51,9 @@ async function main() {
   }
 
   const unifiedCost = toCostConfig();
+  const constraints = loadTradingConstraints();
   const baseCfg: BacktestConfig = {
-    startCash: 1_000_000,
+    startCash: constraints.initialCapitalYuan,
     rebalanceEveryNDays: 1,
     decisionEveryNDays: 1,
     executionPrice: "next_open",
@@ -59,10 +61,10 @@ async function main() {
     endDate,
     feeBps: roundTripBps() / 2,  // legacy per-side field, derived from cost model
     costConfig: unifiedCost,
-    maxPositions: 4,
+    maxPositions: constraints.maxPositions,
     autoSellUnselected: true,
-    minHoldBars: 5,
-    rebalanceThresholdPct: 5,
+    minHoldBars: constraints.minHoldingBars,
+    rebalanceThresholdPct: constraints.rebalanceThresholdPct,
     sharpeTarget: 3,
     optimizationWindow: "post_cny_2026",
   };

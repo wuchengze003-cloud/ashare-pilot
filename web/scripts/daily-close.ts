@@ -6,17 +6,25 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
+import Database from "better-sqlite3";
 import { loadActiveEntries } from "../lib/universe";
 import { buildSymbolSeriesFromPyserverCache } from "../lib/dashboardData";
 import {
+  buildDailyCloseProductionReceipt,
+  isShortHistoryStrategySeries,
   parseSymbolList,
   shanghaiDateTimeParts,
   validateDailyCloseData,
+  validateSignalsEndpointBody,
   type AnalystCoverageItem,
+  type DailyCloseProductionReceipt,
+  type SignalsEndpointBody,
 } from "../lib/dailyClose";
 import { readRuntimeJson, writeRuntimeJson } from "../lib/runtimeData";
 import {
+  assertProductionRuntimeArtifacts,
   assertRuntimeArtifacts,
+  readProductionRuntimeValidationInput,
   readRuntimeValidationInput,
   type RuntimeBacktestSnapshot,
   type RuntimeMetaSnapshot,
@@ -48,6 +56,7 @@ interface DailyCloseHealth {
   remote?: {
     base_url: string;
   };
+  production?: DailyCloseProductionReceipt;
   error?: string;
 }
 
@@ -91,7 +100,8 @@ function runCommand(
 }
 
 function runIsolatedBuild(steps: StepResult[], nextBasePath: string) {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "a-share-health-build-"));
+  const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), "a-share-health-build-"));
+  const tempRoot = path.join(tempRepo, "web");
   try {
     fs.cpSync(webRoot, tempRoot, {
       recursive: true,
@@ -109,13 +119,16 @@ function runIsolatedBuild(steps: StepResult[], nextBasePath: string) {
         ].includes(topLevel);
       },
     });
+    fs.cpSync(path.join(repoRoot, "config"), path.join(tempRepo, "config"), {
+      recursive: true,
+    });
     fs.symlinkSync(path.join(webRoot, "node_modules"), path.join(tempRoot, "node_modules"), "dir");
     runCommand(steps, "isolated production build", "npm", ["run", "build"], {
       cwd: tempRoot,
       env: { ...process.env, NEXT_BASE_PATH: nextBasePath },
     });
   } finally {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
+    fs.rmSync(tempRepo, { recursive: true, force: true });
   }
 }
 
@@ -160,6 +173,31 @@ function startDetached(
   child.unref();
   fs.closeSync(logFd);
   console.log(`[daily-close] started ${name} pid=${child.pid}, log=${logPath}`);
+}
+
+function cachedKlineCoverage(db: Database.Database, symbol: string, expectedDate: string): {
+  latestDate?: string;
+  uniqueDates: number;
+} {
+  const rows = db.prepare(
+    "select payload from cache where key like ?",
+  ).all(`kline:${symbol}:%:%:qfq`) as Array<{ payload: string }>;
+  const dates = new Set<string>();
+  for (const row of rows) {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(row.payload);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(payload)) continue;
+    for (const item of payload) {
+      const date = (item as { date?: unknown }).date;
+      if (typeof date === "string" && date <= expectedDate) dates.add(date);
+    }
+  }
+  const sorted = [...dates].sort();
+  return { latestDate: sorted.at(-1), uniqueDates: sorted.length };
 }
 
 async function ensurePyserver(steps: StepResult[], pyserverUrl: string) {
@@ -229,17 +267,18 @@ async function validateSignalsEndpoint(
   try {
     const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(60_000) });
     if (!response.ok) throw new Error(`${name} returned HTTP ${response.status}`);
-    const body = await response.json() as { signal_date?: string; latest_complete_date?: string; signals?: unknown[] };
-    if (body.signal_date !== expectedDate || body.latest_complete_date !== expectedDate) {
+    const body = await response.json() as SignalsEndpointBody;
+    const issues = validateSignalsEndpointBody(body, expectedDate);
+    if (issues.length > 0) {
       throw new Error(
-        `${name} is stale: signal=${body.signal_date}, complete=${body.latest_complete_date}, expected=${expectedDate}`,
+        `${name} failed validation: ${issues.map((issue) => `${issue.code}: ${issue.message}`).join("; ")}`,
       );
     }
     steps.push({
       name,
       status: "passed",
       durationMs: Date.now() - started,
-      detail: `${body.signals?.length ?? 0} signals`,
+      detail: `${body.status} · champion=${body.champion_id ?? "none"} · ${body.signals?.length ?? 0} signals`,
     });
   } catch (error) {
     steps.push({
@@ -279,9 +318,16 @@ async function main() {
 
   try {
     await ensurePyserver(steps, pyserverUrl);
-    runCommand(steps, "refresh market data and dashboard (all strategies)", "npm", ["run", "dashboard:update"], {
+    runCommand(steps, "refresh market data and production runtime", "npm", ["run", "dashboard:update"], {
       cwd: webRoot,
-      env: { ...process.env, PYSERVER_URL: pyserverUrl, DASHBOARD_ALL_STRATEGIES: "1" },
+      env: {
+        ...process.env,
+        PYSERVER_URL: pyserverUrl,
+        DASHBOARD_ALL_STRATEGIES:
+          process.env.DAILY_CLOSE_INCLUDE_LEGACY_DIAGNOSTICS === "1"
+            ? "1"
+            : "0",
+      },
     });
     runCommand(steps, "validate runtime consistency", "npm", ["run", "dashboard:validate"], { cwd: webRoot });
 
@@ -289,9 +335,22 @@ async function main() {
     const pyserverCacheDb = path.resolve(webRoot, process.env.PYSERVER_CACHE_DB ?? "../pyserver/cache.db");
     const marketData = buildSymbolSeriesFromPyserverCache(universe, pyserverCacheDb);
     const seriesSymbols = new Set(marketData.series.map((item) => item.entry.symbol));
-    const allowedMissingSeriesSymbols = universe
-      .filter((entry) => !seriesSymbols.has(entry.symbol) && entry.strategy_from === expectedDate)
-      .map((entry) => entry.symbol);
+    const cacheDb = new Database(pyserverCacheDb, { readonly: true });
+    let allowedMissingSeriesSymbols: string[];
+    try {
+      allowedMissingSeriesSymbols = universe
+        .filter((entry) => {
+          if (seriesSymbols.has(entry.symbol)) return false;
+          return isShortHistoryStrategySeries(
+            entry,
+            expectedDate,
+            cachedKlineCoverage(cacheDb, entry.symbol, expectedDate),
+          );
+        })
+        .map((entry) => entry.symbol);
+    } finally {
+      cacheDb.close();
+    }
     const benchmarkLatestDate = marketData.benchmark.at(-1)?.date;
     health.latest_market_date = benchmarkLatestDate;
     if (benchmarkLatestDate !== expectedDate) {
@@ -303,6 +362,13 @@ async function main() {
 
     const validationInput = readRuntimeValidationInput();
     assertRuntimeArtifacts(validationInput);
+    const productionValidationInput = readProductionRuntimeValidationInput();
+    assertProductionRuntimeArtifacts(productionValidationInput);
+    const productionReceipt = buildDailyCloseProductionReceipt(productionValidationInput);
+    if (!productionReceipt) {
+      throw new Error("validated production runtime did not produce a daily-close receipt");
+    }
+    health.production = productionReceipt;
     const analyst = readRuntimeJson<{ items?: AnalystCoverageItem[] }>("analyst.json");
     const coverageIssues = validateDailyCloseData({
       expectedDate,
@@ -318,6 +384,7 @@ async function main() {
       backtest: validationInput.backtest as RuntimeBacktestSnapshot | null,
       signals: validationInput.signals as RuntimeSignalsSnapshot | null,
       meta: validationInput.meta as RuntimeMetaSnapshot | null,
+      production: productionValidationInput,
       analystItems: analyst?.items ?? [],
     });
     if (coverageIssues.length > 0) {
