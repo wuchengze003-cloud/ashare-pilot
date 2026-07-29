@@ -64,3 +64,36 @@ test("fetchMinuteKlines forwards the bounded historical-minute query", async () 
     globalThis.fetch = originalFetch;
   }
 });
+
+test("enhancement clients forward explicit point-in-time history ranges", async () => {
+  const calls: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    calls.push(String(input));
+    const url = new URL(String(input));
+    const body = url.pathname === "/index-daily"
+      ? { index_code: "000300.SH", index_name: "hs300", rows: [] }
+      : { symbol: "000001", rows: [] };
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const { fetchIndexDaily, fetchMarginDetail, fetchMoneyflow } = await import("../lib/pyserver");
+    const range = { startDate: "2026-02-24", endDate: "2026-07-24" };
+    await fetchMoneyflow("000001", range);
+    await fetchMarginDetail("000001", range);
+    await fetchIndexDaily("hs300", range);
+    assert.equal(calls.length, 3);
+    for (const call of calls) {
+      const url = new URL(call);
+      assert.equal(url.searchParams.get("start_date"), "20260224");
+      assert.equal(url.searchParams.get("end_date"), "20260724");
+      assert.equal(url.searchParams.has("days"), false);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

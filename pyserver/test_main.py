@@ -90,5 +90,55 @@ class MinuteKlineTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 400)
 
 
+class DailyHistoryEndpointTests(unittest.TestCase):
+    def setUp(self):
+        with main.db() as conn:
+            conn.execute("DELETE FROM cache")
+
+    def test_explicit_daily_range_is_preserved(self):
+        start, end, explicit = main._checked_daily_range(
+            20,
+            "20260224",
+            "20260724",
+        )
+        self.assertEqual((start, end, explicit), ("20260224", "20260724", True))
+
+    def test_daily_range_rejects_reverse_dates(self):
+        with self.assertRaises(HTTPException) as raised:
+            main._checked_daily_range(20, "20260724", "20260224")
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_moneyflow_explicit_range_does_not_tail_to_legacy_days(self):
+        class FakeMoneyflowClient:
+            def moneyflow(self, **kwargs):
+                self.kwargs = kwargs
+                return pd.DataFrame([
+                    {
+                        "trade_date": f"202601{i:02d}",
+                        "buy_lg_amount": i,
+                        "sell_lg_amount": 0,
+                        "buy_elg_amount": 0,
+                        "sell_elg_amount": 0,
+                        "net_mf_amount": i,
+                    }
+                    for i in range(1, 6)
+                ])
+
+        fake = FakeMoneyflowClient()
+        with patch.object(main, "_pro", fake), patch.object(main._MONEYFLOW_LIMITER, "acquire"):
+            result = main.moneyflow(
+                symbol="000001",
+                days=2,
+                start_date="20260101",
+                end_date="20260131",
+            )
+        self.assertEqual(len(result.rows), 5)
+        self.assertEqual(fake.kwargs["start_date"], "20260101")
+        self.assertEqual(fake.kwargs["end_date"], "20260131")
+        self.assertEqual([row.trade_date for row in result.rows], [
+            "20260101", "20260102", "20260103", "20260104", "20260105",
+        ])
+
+
 if __name__ == "__main__":
     unittest.main()

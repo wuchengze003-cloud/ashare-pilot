@@ -17,6 +17,9 @@
 import type { Signal, SymbolSnapshot } from "../strategyTypes";
 import type { Scorer } from "../backtest";
 import type { MoneyflowRow, MarginRow } from "../pyserver";
+import { rowsAtOrBefore } from "../pointInTime";
+
+export type EnhancementDataStatus = "not-requested" | "available" | "partial" | "unavailable";
 
 export interface TideScorerOptions {
   minCloses?: number;
@@ -37,6 +40,10 @@ export interface TideScorerOptions {
   /** Real Tushare margin detail data per symbol (Tide-V2). When provided,
    *  adds 融资余额变化 as a confirmation factor for leveraged sentiment. */
   marginData?: Record<string, MarginRow[]>;
+  /** Explicit fetch result. A requested but unavailable panel must fail closed. */
+  moneyflowStatus?: EnhancementDataStatus;
+  /** Minimum point-in-time symbol coverage required before Tide can trade. */
+  minMoneyflowCoverage?: number;
 }
 
 function avg(xs: number[]): number {
@@ -171,15 +178,12 @@ export function tideScorer(options: TideScorerOptions = {}): Scorer {
     maxOneDayChasePct = 5,
     moneyflowData,
     marginData,
+    moneyflowStatus = moneyflowData === undefined ? "not-requested" : "available",
+    minMoneyflowCoverage = 0.5,
   } = options;
 
-  // Tide-V2: if moneyflow data was requested but is empty/unavailable,
-  // the strategy is suspended — return no signals.
-  const moneyflowRequested = moneyflowData !== undefined;
-  const moneyflowAvailable = moneyflowData !== undefined && Object.keys(moneyflowData).length > 0;
-
   return async (snapshots: SymbolSnapshot[], { asOf }): Promise<Signal[]> => {
-    if (moneyflowRequested && !moneyflowAvailable) {
+    if (moneyflowStatus === "unavailable") {
       // Strategy suspended: data source is down
       return snapshots.map((s) => ({
         symbol: s.symbol,
@@ -187,6 +191,26 @@ export function tideScorer(options: TideScorerOptions = {}): Scorer {
         confidence: 0,
         size: 0,
         rationale: "潮汐: 资金流数据不可用，策略暂停",
+      }));
+    }
+
+    const visibleMoneyflow = new Map<string, MoneyflowRow[]>();
+    const visibleMargin = new Map<string, MarginRow[]>();
+    for (const snapshot of snapshots) {
+      const mfRows = rowsAtOrBefore(moneyflowData?.[snapshot.symbol], asOf, 10);
+      if (mfRows.length > 0) visibleMoneyflow.set(snapshot.symbol, mfRows);
+      const mgRows = rowsAtOrBefore(marginData?.[snapshot.symbol], asOf, 20);
+      if (mgRows.length > 0) visibleMargin.set(snapshot.symbol, mgRows);
+    }
+    const moneyflowRequested = moneyflowStatus !== "not-requested";
+    const pointInTimeCoverage = snapshots.length > 0 ? visibleMoneyflow.size / snapshots.length : 0;
+    if (moneyflowRequested && pointInTimeCoverage < minMoneyflowCoverage) {
+      return snapshots.map((s) => ({
+        symbol: s.symbol,
+        action: "hold" as const,
+        confidence: 0,
+        size: 0,
+        rationale: `潮汐: ${asOf}资金流覆盖率${(pointInTimeCoverage * 100).toFixed(1)}%，策略暂停`,
       }));
     }
 
@@ -223,8 +247,8 @@ export function tideScorer(options: TideScorerOptions = {}): Scorer {
       let largeOrderImbalance: number | null = null;
       let flowPersistence: number | null = null;
       let marginChange: number | null = null;
-      if (moneyflowData && moneyflowData[s.symbol]) {
-        const mfRows = moneyflowData[s.symbol];
+      if (visibleMoneyflow.has(s.symbol)) {
+        const mfRows = visibleMoneyflow.get(s.symbol)!;
         if (mfRows.length > 0) {
           const latest = mfRows[mfRows.length - 1];
           const totalLg = (latest.buy_lg_amount ?? 0) + (latest.sell_lg_amount ?? 0);
@@ -243,8 +267,8 @@ export function tideScorer(options: TideScorerOptions = {}): Scorer {
         }
       }
       // Margin balance change (融资余额变化): rising margin = bullish leverage sentiment
-      if (marginData && marginData[s.symbol]) {
-        const mgRows = marginData[s.symbol];
+      if (visibleMargin.has(s.symbol)) {
+        const mgRows = visibleMargin.get(s.symbol)!;
         if (mgRows.length >= 2) {
           const latestRzye = mgRows[mgRows.length - 1].rzye;
           const prevRzye = mgRows[0].rzye;

@@ -1,7 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { validateRuntimeArtifacts, type RuntimeBacktestSnapshot } from "../lib/runtimeValidation";
+import {
+  validateProductionRuntimeArtifacts,
+  validateRuntimeArtifacts,
+  type RuntimeBacktestSnapshot,
+} from "../lib/runtimeValidation";
+import type {
+  ProductionGateSnapshot,
+  ProductionSignalsSnapshot,
+} from "../lib/productionGate";
 import type { SignalHistorySnapshot } from "../lib/signalHistory";
 import type { Signal } from "../lib/strategyTypes";
 
@@ -17,6 +25,7 @@ const latestSignals: Signal[] = [
 
 function history(date: string, signals: Signal[]): SignalHistorySnapshot {
   return {
+    strategy_id: "momentum-v1",
     generated_at: `${date}T08:00:00.000Z`,
     signal_date: date,
     execution_price: "next_open",
@@ -200,4 +209,103 @@ test("runtime validation rejects shadow predictions with future data", () => {
   });
 
   assert.ok(issues.some((issue) => issue.code === "SHADOW_MODEL_FUTURE_DATA"));
+});
+
+test("runtime validation rejects history from another strategy", () => {
+  const prismHistory = {
+    ...history("2026-06-24", archivedSignals),
+    strategy_id: "prism-v1",
+  };
+  const issues = validateRuntimeArtifacts({
+    backtest: backtest({ strategy: { id: "momentum-v1" } }),
+    signals: {
+      signal_date: "2026-06-26",
+      latest_complete_date: "2026-06-26",
+      universe_count: 2,
+      signals: latestSignals,
+    },
+    meta: { universe_count: 2 },
+    histories: [prismHistory, history("2026-06-26", latestSignals)],
+  });
+
+  assert.ok(issues.some((issue) => issue.code === "HISTORY_STRATEGY_MISMATCH"));
+});
+
+function cashOnlyGate(): ProductionGateSnapshot {
+  return {
+    schema_version: 2,
+    generated_at: "2026-07-28T10:00:00.000Z",
+    status: "cash-only",
+    champion_id: null,
+    contract_sha256: "contract",
+    contract_version: "3.0.0",
+    feature_version: "5",
+    panel_start: "2018-04-02",
+    panel_end: "2026-07-27",
+    complete_daily_trading_days: 2077,
+    daily_status: "daily_phase_complete_pending_three_candidate_minute_race",
+    minute_status: "blocked_minute_data_coverage",
+    minute_coverage_pct: 3.69,
+    required_symbol_days: 15_436,
+    available_symbol_days: 570,
+    reason_codes: ["MINUTE_DATA_INCOMPLETE"],
+    message: "严格生产门禁未通过，当前不发布开仓信号。",
+    candidates: [],
+  };
+}
+
+function cashOnlySignals(): ProductionSignalsSnapshot {
+  return {
+    schema_version: 2,
+    generated_at: "2026-07-28T10:00:00.000Z",
+    gate_generated_at: "2026-07-28T10:00:00.000Z",
+    contract_sha256: "contract",
+    status: "cash-only",
+    champion_id: null,
+    signal_date: "2026-07-28",
+    latest_complete_date: "2026-07-28",
+    signal_basis: "latest-complete-close",
+    reason_codes: ["MINUTE_DATA_INCOMPLETE"],
+    signals: [],
+  };
+}
+
+test("production runtime accepts an explained cash-only state", () => {
+  assert.deepEqual(
+    validateProductionRuntimeArtifacts({
+      gate: cashOnlyGate(),
+      signals: cashOnlySignals(),
+    }),
+    [],
+  );
+});
+
+test("production runtime rejects signals leaking through a cash-only gate", () => {
+  const signals = cashOnlySignals();
+  signals.signals = [
+    {
+      symbol: "000001",
+      action: "buy",
+      confidence: 0.9,
+      size: 0.25,
+      rationale: "must be blocked",
+    },
+  ];
+  const codes = validateProductionRuntimeArtifacts({
+    gate: cashOnlyGate(),
+    signals,
+  }).map((issue) => issue.code);
+
+  assert.ok(codes.includes("CASH_ONLY_HAS_SIGNALS"));
+});
+
+test("production runtime rejects a stale signal snapshot from another gate run", () => {
+  const signals = cashOnlySignals();
+  signals.gate_generated_at = "2026-07-28T09:59:00.000Z";
+  const codes = validateProductionRuntimeArtifacts({
+    gate: cashOnlyGate(),
+    signals,
+  }).map((issue) => issue.code);
+
+  assert.ok(codes.includes("PRODUCTION_GATE_GENERATION_MISMATCH"));
 });

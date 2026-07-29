@@ -1,5 +1,13 @@
 import type { BacktestResult } from "./backtest";
 import type { LatestPlan } from "./latestPlan";
+import {
+  PRODUCTION_GATE_FILE,
+  PRODUCTION_GATE_SCHEMA_VERSION,
+  PRODUCTION_SIGNALS_FILE,
+  PRODUCTION_SIGNALS_SCHEMA_VERSION,
+  type ProductionGateSnapshot,
+  type ProductionSignalsSnapshot,
+} from "./productionGate";
 import { readRuntimeJson } from "./runtimeData";
 import { readSignalHistorySnapshots, type SignalHistorySnapshot } from "./signalHistory";
 import type { Signal } from "./strategyTypes";
@@ -17,6 +25,7 @@ export interface RuntimeMetaSnapshot {
 }
 
 export interface RuntimeBacktestSnapshot extends BacktestResult {
+  strategy?: { id: string };
   snapshot_basis?: "latest-complete-close" | "intraday-midday";
   snapshot_label?: string;
   latestDate?: string;
@@ -34,6 +43,11 @@ export interface RuntimeValidationInput {
   signals: RuntimeSignalsSnapshot | null;
   histories: SignalHistorySnapshot[];
   meta?: RuntimeMetaSnapshot | null;
+}
+
+export interface ProductionRuntimeValidationInput {
+  gate: ProductionGateSnapshot | null;
+  signals: ProductionSignalsSnapshot | null;
 }
 
 function nearlyEqual(a: number | undefined, b: number | undefined, tolerance = 1e-6): boolean {
@@ -216,7 +230,15 @@ export function validateRuntimeArtifacts(input: RuntimeValidationInput): Runtime
   }
 
   const historiesByDate = new Map<string, SignalHistorySnapshot>();
+  const expectedStrategyId = backtest.strategy?.id ?? "momentum-v1";
   for (const history of histories) {
+    if (history.strategy_id !== expectedStrategyId) {
+      issues.push({
+        code: "HISTORY_STRATEGY_MISMATCH",
+        message: `history ${history.signal_date} strategy=${history.strategy_id} expected=${expectedStrategyId}`,
+      });
+      continue;
+    }
     if (historiesByDate.has(history.signal_date)) {
       issues.push({ code: "DUPLICATE_HISTORY", message: `duplicate signal history ${history.signal_date}` });
     }
@@ -225,12 +247,7 @@ export function validateRuntimeArtifacts(input: RuntimeValidationInput): Runtime
 
   if (latestPlan) {
     const latestHistory = historiesByDate.get(latestPlan.decisionDate);
-    if (!latestHistory) {
-      issues.push({
-        code: "MISSING_LATEST_HISTORY",
-        message: `missing signals-history/${latestPlan.decisionDate}.json`,
-      });
-    } else {
+    if (latestHistory) {
       compareSignals(issues, `history ${latestPlan.decisionDate} vs latestPlan`, latestPlan.signals, latestHistory.signals);
     }
   }
@@ -286,13 +303,152 @@ export function validateRuntimeArtifacts(input: RuntimeValidationInput): Runtime
   return issues;
 }
 
+export function validateProductionRuntimeArtifacts(
+  input: ProductionRuntimeValidationInput,
+): RuntimeValidationIssue[] {
+  const issues: RuntimeValidationIssue[] = [];
+  const { gate, signals } = input;
+  if (!gate) {
+    issues.push({
+      code: "MISSING_PRODUCTION_GATE",
+      message: `${PRODUCTION_GATE_FILE} is missing`,
+    });
+    return issues;
+  }
+  if (gate.schema_version !== PRODUCTION_GATE_SCHEMA_VERSION) {
+    issues.push({
+      code: "INVALID_PRODUCTION_GATE_SCHEMA",
+      message: `production gate schema=${String(gate.schema_version)}`,
+    });
+  }
+  if (gate.status !== "active" && gate.status !== "cash-only") {
+    issues.push({
+      code: "INVALID_PRODUCTION_GATE_STATUS",
+      message: `production gate status=${String(gate.status)}`,
+    });
+  }
+  if (!signals) {
+    issues.push({
+      code: "MISSING_PRODUCTION_SIGNALS",
+      message: `${PRODUCTION_SIGNALS_FILE} is missing`,
+    });
+    return issues;
+  }
+  if (signals.schema_version !== PRODUCTION_SIGNALS_SCHEMA_VERSION) {
+    issues.push({
+      code: "INVALID_PRODUCTION_SIGNALS_SCHEMA",
+      message: `production signals schema=${String(signals.schema_version)}`,
+    });
+  }
+  if (signals.status !== gate.status) {
+    issues.push({
+      code: "PRODUCTION_STATUS_MISMATCH",
+      message: `gate=${gate.status} signals=${signals.status}`,
+    });
+  }
+  if (signals.champion_id !== gate.champion_id) {
+    issues.push({
+      code: "PRODUCTION_CHAMPION_MISMATCH",
+      message: `gate=${gate.champion_id ?? "none"} signals=${signals.champion_id ?? "none"}`,
+    });
+  }
+  if (signals.gate_generated_at !== gate.generated_at) {
+    issues.push({
+      code: "PRODUCTION_GATE_GENERATION_MISMATCH",
+      message: `gate=${gate.generated_at} signals=${signals.gate_generated_at}`,
+    });
+  }
+  if (signals.contract_sha256 !== gate.contract_sha256) {
+    issues.push({
+      code: "PRODUCTION_CONTRACT_MISMATCH",
+      message: `gate=${gate.contract_sha256 ?? "none"} signals=${signals.contract_sha256 ?? "none"}`,
+    });
+  }
+  if (
+    signals.reason_codes.length !== gate.reason_codes.length ||
+    signals.reason_codes.some((code, index) => code !== gate.reason_codes[index])
+  ) {
+    issues.push({
+      code: "PRODUCTION_REASON_CODES_MISMATCH",
+      message: `gate=${gate.reason_codes.join(",")} signals=${signals.reason_codes.join(",")}`,
+    });
+  }
+  if (!signals.signal_date || !signals.latest_complete_date) {
+    issues.push({
+      code: "PRODUCTION_SIGNAL_DATE_MISSING",
+      message: "production signal_date and latest_complete_date are required",
+    });
+  }
+  if (
+    signals.signal_basis !== "latest-complete-close" &&
+    signals.signal_basis !== "intraday-midday"
+  ) {
+    issues.push({
+      code: "INVALID_PRODUCTION_SIGNAL_BASIS",
+      message: `production signal_basis=${String(signals.signal_basis)}`,
+    });
+  }
+  if (gate.status === "cash-only") {
+    if (gate.champion_id !== null || signals.champion_id !== null) {
+      issues.push({
+        code: "CASH_ONLY_HAS_CHAMPION",
+        message: "cash-only production state cannot name a champion",
+      });
+    }
+    if (signals.signals.length > 0) {
+      issues.push({
+        code: "CASH_ONLY_HAS_SIGNALS",
+        message: `cash-only production state contains ${signals.signals.length} signals`,
+      });
+    }
+    if (gate.reason_codes.length === 0 || signals.reason_codes.length === 0) {
+      issues.push({
+        code: "CASH_ONLY_REASON_MISSING",
+        message: "cash-only production state must explain why opening signals are blocked",
+      });
+    }
+  } else {
+    if (!gate.champion_id || !signals.champion_id) {
+      issues.push({
+        code: "ACTIVE_CHAMPION_MISSING",
+        message: "active production state requires one champion",
+      });
+    }
+    if (gate.reason_codes.length > 0 || signals.reason_codes.length > 0) {
+      issues.push({
+        code: "ACTIVE_GATE_HAS_FAILURES",
+        message: "active production state cannot contain failure reason codes",
+      });
+    }
+  }
+  return issues;
+}
+
 export function readRuntimeValidationInput(): RuntimeValidationInput {
+  const backtest = readRuntimeJson<RuntimeBacktestSnapshot>("backtest.json");
+  const strategyId = backtest?.strategy?.id ?? "momentum-v1";
   return {
-    backtest: readRuntimeJson<RuntimeBacktestSnapshot>("backtest.json"),
+    backtest,
     signals: readRuntimeJson<RuntimeSignalsSnapshot>("signals.json"),
     meta: readRuntimeJson<RuntimeMetaSnapshot>("meta.json"),
-    histories: readSignalHistorySnapshots(Number.POSITIVE_INFINITY),
+    histories: readSignalHistorySnapshots(Number.POSITIVE_INFINITY, strategyId),
   };
+}
+
+export function readProductionRuntimeValidationInput(): ProductionRuntimeValidationInput {
+  let gate: ProductionGateSnapshot | null = null;
+  let signals: ProductionSignalsSnapshot | null = null;
+  try {
+    gate = readRuntimeJson<ProductionGateSnapshot>(PRODUCTION_GATE_FILE);
+  } catch {
+    gate = null;
+  }
+  try {
+    signals = readRuntimeJson<ProductionSignalsSnapshot>(PRODUCTION_SIGNALS_FILE);
+  } catch {
+    signals = null;
+  }
+  return { gate, signals };
 }
 
 export function assertRuntimeArtifacts(input: RuntimeValidationInput): void {
@@ -300,6 +456,17 @@ export function assertRuntimeArtifacts(input: RuntimeValidationInput): void {
   if (issues.length > 0) {
     throw new Error(
       `Runtime data validation failed:\n${issues.map((issue) => `- ${issue.code}: ${issue.message}`).join("\n")}`,
+    );
+  }
+}
+
+export function assertProductionRuntimeArtifacts(
+  input: ProductionRuntimeValidationInput,
+): void {
+  const issues = validateProductionRuntimeArtifacts(input);
+  if (issues.length > 0) {
+    throw new Error(
+      `Production runtime validation failed:\n${issues.map((issue) => `- ${issue.code}: ${issue.message}`).join("\n")}`,
     );
   }
 }

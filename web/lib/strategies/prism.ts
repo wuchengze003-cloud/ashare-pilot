@@ -23,6 +23,8 @@
 import type { Signal, SymbolSnapshot } from "../strategyTypes";
 import type { Scorer } from "../backtest";
 import type { IndexDailyRow, MarketBreadth } from "../pyserver";
+import { latestRowAtOrBefore, rowsAtOrBefore } from "../pointInTime";
+import type { EnhancementDataStatus } from "./tide";
 
 export interface PrismScorerOptions {
   minCloses?: number;
@@ -38,8 +40,10 @@ export interface PrismScorerOptions {
    *  When provided, regime detection uses real index trends instead of
    *  cross-sectional estimates. */
   indexData?: IndexDailyRow[];
-  /** Real market breadth for regime detection (Prism-V2). */
-  marketBreadth?: MarketBreadth;
+  /** Point-in-time market breadth history for regime detection (Prism-V2). */
+  marketBreadthData?: MarketBreadth[];
+  /** Explicit fetch result. A requested but unavailable panel must fail closed. */
+  regimeDataStatus?: EnhancementDataStatus;
 }
 
 function avg(xs: number[]): number {
@@ -222,12 +226,34 @@ export function prismScorer(options: PrismScorerOptions = {}): Scorer {
     maxOneDayChasePct = 5,
     targetVol = 0.20,
     indexData,
-    marketBreadth,
+    marketBreadthData,
+    regimeDataStatus = indexData === undefined ? "not-requested" : "available",
   } = options;
 
-  const hasRealRegimeData = indexData !== undefined && indexData.length > 0;
-
   return async (snapshots: SymbolSnapshot[], { asOf }): Promise<Signal[]> => {
+    if (regimeDataStatus === "unavailable") {
+      return snapshots.map((snapshot) => ({
+        symbol: snapshot.symbol,
+        action: "hold" as const,
+        confidence: 0,
+        size: 0,
+        rationale: "棱镜: 市场状态数据不可用，策略暂停",
+      }));
+    }
+    const visibleIndexData = rowsAtOrBefore(indexData, asOf);
+    const visibleMarketBreadth = latestRowAtOrBefore(marketBreadthData, asOf);
+    const regimeDataRequested = regimeDataStatus !== "not-requested";
+    const hasRealRegimeData = visibleIndexData.length >= 5;
+    if (regimeDataRequested && !hasRealRegimeData) {
+      return snapshots.map((snapshot) => ({
+        symbol: snapshot.symbol,
+        action: "hold" as const,
+        confidence: 0,
+        size: 0,
+        rationale: `棱镜: ${asOf}市场状态历史不足，策略暂停`,
+      }));
+    }
+
     // Phase 1: compute per-stock returns for regime detection
     const allReturns: number[][] = [];
     interface StockData {
@@ -312,9 +338,9 @@ export function prismScorer(options: PrismScorerOptions = {}): Scorer {
     let regime: Regime;
     let positionScale = 1.0;
     let cashRatio = 0.0;
-    if (hasRealRegimeData && indexData) {
+    if (hasRealRegimeData) {
       // Prism-V2: use real index data and market breadth
-      const result = detectRegimeFromIndex(indexData, marketBreadth, regimeLookback);
+      const result = detectRegimeFromIndex(visibleIndexData, visibleMarketBreadth, regimeLookback);
       regime = result.regime;
       positionScale = result.positionScale;
       cashRatio = result.cashRatio;

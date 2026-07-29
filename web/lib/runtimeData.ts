@@ -1,5 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+
+function writeJsonAtomic(file: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + "\n", "utf-8");
+    fs.renameSync(temporary, file);
+  } finally {
+    if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
+  }
+}
 
 export function runtimeDataDir(): string {
   const configured = process.env.RUNTIME_DATA_DIR;
@@ -37,8 +49,7 @@ export function readStrategyJson<T>(strategyId: string, name: string): T | null 
 /** Write a JSON file to a strategy-specific runtime directory. */
 export function writeStrategyJson(strategyId: string, name: string, value: unknown): void {
   const file = runtimeStrategyPath(strategyId, name);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", "utf-8");
+  writeJsonAtomic(file, value);
 }
 
 export function readRuntimeJson<T>(name: string): T | null {
@@ -49,8 +60,7 @@ export function readRuntimeJson<T>(name: string): T | null {
 
 export function writeRuntimeJson(name: string, value: unknown): void {
   const file = runtimeDataPath(name);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", "utf-8");
+  writeJsonAtomic(file, value);
 }
 
 export function listRuntimeJson<T>(dirName: string): Array<{ name: string; data: T }> {

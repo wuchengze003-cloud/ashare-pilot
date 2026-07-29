@@ -12,6 +12,8 @@ export interface Kline {
   low: number;
   close: number;
   volume: number;
+  /** Daily turnover in yuan. Optional for legacy cached rows. */
+  amount?: number;
 }
 
 export type MinuteKlineFrequency = "1min" | "5min" | "15min" | "30min" | "60min";
@@ -171,8 +173,23 @@ export interface MoneyflowResponse {
   rows: MoneyflowRow[];
 }
 
-export function fetchMoneyflow(symbol: string, days = 20) {
-  return get<MoneyflowResponse>("/moneyflow", { symbol, days: String(days) });
+export interface DailyHistoryQuery {
+  days?: number;
+  startDate?: string;
+  endDate?: string;
+}
+
+function dailyHistoryParams(query: number | DailyHistoryQuery): Record<string, string> {
+  const normalized = typeof query === "number" ? { days: query } : query;
+  const params: Record<string, string> = {};
+  if (normalized.days !== undefined) params.days = String(normalized.days);
+  if (normalized.startDate) params.start_date = normalized.startDate.replaceAll("-", "");
+  if (normalized.endDate) params.end_date = normalized.endDate.replaceAll("-", "");
+  return params;
+}
+
+export function fetchMoneyflow(symbol: string, query: number | DailyHistoryQuery = 20) {
+  return get<MoneyflowResponse>("/moneyflow", { symbol, ...dailyHistoryParams(query) });
 }
 
 // ---------- Index Daily (Prism strategy) -------------------------------------
@@ -193,8 +210,8 @@ export interface IndexDailyResponse {
   rows: IndexDailyRow[];
 }
 
-export function fetchIndexDaily(index: string, days = 60) {
-  return get<IndexDailyResponse>("/index-daily", { index, days: String(days) });
+export function fetchIndexDaily(index: string, query: number | DailyHistoryQuery = 60) {
+  return get<IndexDailyResponse>("/index-daily", { index, ...dailyHistoryParams(query) });
 }
 
 // ---------- Market Breadth (Prism strategy) ----------------------------------
@@ -231,8 +248,8 @@ export interface MarginResponse {
   rows: MarginRow[];
 }
 
-export function fetchMarginDetail(symbol: string, days = 20) {
-  return get<MarginResponse>("/margin-detail", { symbol, days: String(days) });
+export function fetchMarginDetail(symbol: string, query: number | DailyHistoryQuery = 20) {
+  return get<MarginResponse>("/margin-detail", { symbol, ...dailyHistoryParams(query) });
 }
 
 // ---------- Index Weight (Prism strategy — 行业扩散度) ------------------------

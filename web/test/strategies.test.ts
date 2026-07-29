@@ -97,3 +97,85 @@ test("all strategy createScorer factories work", () => {
     assert.equal(typeof scorer, "function");
   }
 });
+
+test("tide scorer never reads moneyflow rows after asOf", async () => {
+  const { closes, volumes } = trendingSeries(40);
+  const snapshot = makeSnapshot("sz000001", closes, volumes);
+  const scorer = tideScorer({
+    minScoreToBuy: 0,
+    moneyflowStatus: "available",
+    minMoneyflowCoverage: 1,
+    moneyflowData: {
+      sz000001: [
+        {
+          trade_date: "20260602",
+          buy_lg_amount: 100,
+          sell_lg_amount: 0,
+          buy_elg_amount: 0,
+          sell_elg_amount: 0,
+          net_mf_amount: 100,
+        },
+      ],
+    },
+  });
+
+  const before = await scorer([snapshot], { asOf: "2026-06-01", mode: "backtest" });
+  assert.equal(before[0].action, "hold");
+  assert.match(before[0].rationale, /覆盖率0.0%/);
+
+  const onDate = await scorer([snapshot], { asOf: "2026-06-02", mode: "backtest" });
+  assert.match(onDate[0].rationale, /潮汐-V2/);
+});
+
+test("tide requested data fails closed when the upstream panel is unavailable", async () => {
+  const { closes, volumes } = trendingSeries(40);
+  const scorer = tideScorer({ moneyflowStatus: "unavailable" });
+  const signals = await scorer(
+    [makeSnapshot("sz000001", closes, volumes)],
+    { asOf: "2026-06-01", mode: "backtest" },
+  );
+  assert.equal(signals[0].action, "hold");
+  assert.equal(signals[0].confidence, 0);
+  assert.match(signals[0].rationale, /策略暂停/);
+});
+
+test("prism scorer never reads index or breadth rows after asOf", async () => {
+  const snapshots: SymbolSnapshot[] = [];
+  for (let i = 0; i < 8; i++) {
+    const { closes, volumes } = trendingSeries(40, 50 + i * 5, 0.003 + i * 0.001);
+    snapshots.push(makeSnapshot(`sz00000${i}`, closes, volumes));
+  }
+  const indexData = Array.from({ length: 5 }, (_, i) => ({
+    trade_date: `2026060${i + 2}`,
+    open: 100 + i,
+    close: 100 + i,
+    high: 101 + i,
+    low: 99 + i,
+    pct_chg: 1,
+    vol: 1_000,
+  }));
+  const scorer = prismScorer({
+    minScoreToBuy: 0,
+    regimeDataStatus: "available",
+    indexData,
+    marketBreadthData: [{
+      trade_date: "20260606",
+      advance_count: 100,
+      decline_count: 1,
+      flat_count: 0,
+      advance_ratio: 0.99,
+      new_high_20: 10,
+      new_low_20: 0,
+      total_amount: 100,
+      limit_up_count: 10,
+      limit_down_count: 0,
+    }],
+  });
+
+  const before = await scorer(snapshots, { asOf: "2026-06-01", mode: "backtest" });
+  assert.ok(before.every((signal) => signal.action === "hold"));
+  assert.ok(before.every((signal) => /历史不足/.test(signal.rationale)));
+
+  const onDate = await scorer(snapshots, { asOf: "2026-06-06", mode: "backtest" });
+  assert.ok(onDate.some((signal) => /棱镜-V2/.test(signal.rationale)));
+});

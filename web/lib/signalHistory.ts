@@ -1,6 +1,6 @@
 import type { LatestPlan } from "./latestPlan";
 import type { SymbolSeries } from "./backtest";
-import { listRuntimeJson, writeRuntimeJson } from "./runtimeData";
+import { listRuntimeJson, readRuntimeJson, writeRuntimeJson } from "./runtimeData";
 
 export interface ArchivedSignal {
   symbol: string;
@@ -15,6 +15,7 @@ export interface ArchivedSignal {
 }
 
 export interface SignalHistorySnapshot {
+  strategy_id: string;
   generated_at: string;
   signal_date: string;
   execution_price: LatestPlan["executionPrice"];
@@ -36,9 +37,11 @@ function latestCloseAtOrBefore(series: SymbolSeries, date: string) {
 export function buildSignalHistorySnapshot(
   plan: LatestPlan,
   series: SymbolSeries[],
+  strategyId = "momentum-v1",
 ): SignalHistorySnapshot {
   const bySymbol = new Map(series.map((s) => [s.entry.symbol, s]));
   return {
+    strategy_id: strategyId,
     generated_at: new Date().toISOString(),
     signal_date: plan.decisionDate,
     execution_price: plan.executionPrice,
@@ -66,16 +69,46 @@ export function buildSignalHistorySnapshot(
   };
 }
 
-export function writeSignalHistorySnapshot(snapshot: SignalHistorySnapshot, strategyId = "momentum-v1"): void {
-  // Write to both the legacy flat path (backward compat) and the per-strategy path
-  writeRuntimeJson(`signals-history/${snapshot.signal_date}.json`, snapshot);
-  writeRuntimeJson(`strategies/${strategyId}/history/${snapshot.signal_date}.json`, snapshot);
+export function writeSignalHistorySnapshot(
+  snapshot: SignalHistorySnapshot,
+  strategyId = "momentum-v1",
+  options: { writeFlat?: boolean } = {},
+): void {
+  if (snapshot.strategy_id !== strategyId) {
+    throw new Error(
+      `signal history strategy mismatch: snapshot=${snapshot.strategy_id} path=${strategyId}`,
+    );
+  }
+  const strategyPath = `strategies/${strategyId}/history/${snapshot.signal_date}.json`;
+  const existing = readRuntimeJson<Partial<SignalHistorySnapshot>>(strategyPath);
+  if (existing) {
+    const normalizedExisting = {
+      ...existing,
+      strategy_id: existing.strategy_id ?? strategyId,
+    };
+    const { generated_at: _existingGeneratedAt, ...existingContent } = normalizedExisting;
+    const { generated_at: _newGeneratedAt, ...newContent } = snapshot;
+    if (JSON.stringify(existingContent) !== JSON.stringify(newContent)) {
+      throw new Error(
+        `immutable signal history conflict: strategy=${strategyId} date=${snapshot.signal_date}`,
+      );
+    }
+  }
+  if (!existing || existing.strategy_id !== strategyId) {
+    writeRuntimeJson(strategyPath, snapshot);
+  }
+  // The flat path is the active runtime contract. Per-strategy comparison runs
+  // must not overwrite it with non-active strategy plans for the same date.
+  if (options.writeFlat ?? true) {
+    writeRuntimeJson(`signals-history/${snapshot.signal_date}.json`, snapshot);
+  }
 }
 
 export function readSignalHistorySnapshots(limit = 20, strategyId?: string): SignalHistorySnapshot[] {
   const dir = strategyId ? `strategies/${strategyId}/history` : "signals-history";
   return listRuntimeJson<SignalHistorySnapshot>(dir)
     .map((item) => item.data)
+    .filter((snapshot) => !strategyId || snapshot.strategy_id === strategyId)
     .sort((a, b) => (a.signal_date < b.signal_date ? 1 : -1))
     .slice(0, limit);
 }

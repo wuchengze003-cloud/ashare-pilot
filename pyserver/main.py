@@ -379,6 +379,8 @@ def _tdx_klines(
             # the rest of the API use 手 (lots = 100 shares). Normalize so the
             # volume field is identical regardless of which source served it.
             "volume": float(r.vol) / 100,
+            # easy-tdx turnover is denominated in yuan.
+            "amount": float(r.amount),
         })
     return rows or None
 
@@ -455,6 +457,7 @@ class Kline(BaseModel):
     low: float
     close: float
     volume: float
+    amount: float | None = None
 
 
 class MinuteKline(BaseModel):
@@ -1212,6 +1215,8 @@ def klines(
                 "low": float(r.low),
                 "close": float(r.close),
                 "volume": float(r.vol),
+                # Tushare daily amount is denominated in thousand yuan.
+                "amount": float(r.amount) * 1000,
             }
             for r in df.itertuples()
             for d in [str(r.trade_date)]
@@ -1533,10 +1538,38 @@ class MoneyflowResponse(BaseModel):
 _MONEYFLOW_LIMITER = _TokenBucket(n=15, window_s=60)
 
 
+def _checked_daily_range(
+    days: int,
+    start_date: str | None,
+    end_date: str | None,
+    *,
+    max_calendar_days: int = 2000,
+) -> tuple[str, str, bool]:
+    """Resolve an explicit point-in-time date range or a legacy rolling window."""
+    explicit = start_date is not None or end_date is not None
+    end_value = end_date or date.today().strftime("%Y%m%d")
+    try:
+        end_dt = datetime.strptime(end_value, "%Y%m%d").date()
+        start_dt = (
+            datetime.strptime(start_date, "%Y%m%d").date()
+            if start_date
+            else end_dt - timedelta(days=days * 2 + 10)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="dates must use YYYYMMDD") from exc
+    if start_dt > end_dt:
+        raise HTTPException(status_code=400, detail="start_date must not exceed end_date")
+    if (end_dt - start_dt).days > max_calendar_days:
+        raise HTTPException(status_code=400, detail=f"date range exceeds {max_calendar_days} calendar days")
+    return start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d"), explicit
+
+
 @app.get("/moneyflow", response_model=MoneyflowResponse)
 def moneyflow(
     symbol: str = Query(..., description="e.g. sz000001 or sh600519"),
-    days: int = Query(20, ge=1, le=60, description="lookback trading days"),
+    days: int = Query(20, ge=1, le=500, description="legacy lookback trading days"),
+    start_date: str | None = Query(None, pattern=r"^\d{8}$"),
+    end_date: str | None = Query(None, pattern=r"^\d{8}$"),
 ):
     """Individual stock money-flow (资金流向) from Tushare moneyflow API.
 
@@ -1544,13 +1577,12 @@ def moneyflow(
     for the Tide strategy's capital-flow signals.
     """
     ts_code, _market = _to_ts_code(symbol)
-    cache_key = f"moneyflow:{ts_code}:{days}"
+    start, end, explicit_range = _checked_daily_range(days, start_date, end_date)
+    cache_key = f"moneyflow:{ts_code}:{start}:{end}"
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
 
-    end = date.today().strftime("%Y%m%d")
-    start = (date.today() - timedelta(days=days * 2 + 10)).strftime("%Y%m%d")
     _MONEYFLOW_LIMITER.acquire()
     try:
         df = _with_retries(
@@ -1566,7 +1598,9 @@ def moneyflow(
     if df is None or df.empty:
         return MoneyflowResponse(symbol=symbol, rows=[])
 
-    df = df.sort_values("trade_date").tail(days)
+    df = df.sort_values("trade_date")
+    if not explicit_range:
+        df = df.tail(days)
     rows = [
         MoneyflowRow(
             trade_date=str(r["trade_date"]),
@@ -1680,7 +1714,9 @@ _MARGIN_LIMITER = _TokenBucket(n=15, window_s=60)
 @app.get("/margin-detail", response_model=MarginResponse)
 def margin_detail(
     symbol: str = Query(..., description="e.g. sz000001 or sh600519"),
-    days: int = Query(20, ge=1, le=60, description="lookback trading days"),
+    days: int = Query(20, ge=1, le=500, description="legacy lookback trading days"),
+    start_date: str | None = Query(None, pattern=r"^\d{8}$"),
+    end_date: str | None = Query(None, pattern=r"^\d{8}$"),
 ):
     """Margin trading detail (融资融券) from Tushare margin_detail API.
 
@@ -1688,13 +1724,12 @@ def margin_detail(
     Useful as a confirmation signal for the Tide strategy.
     """
     ts_code, _market = _to_ts_code(symbol)
-    cache_key = f"margin:{ts_code}:{days}"
+    start, end, explicit_range = _checked_daily_range(days, start_date, end_date)
+    cache_key = f"margin:{ts_code}:{start}:{end}"
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
 
-    end = date.today().strftime("%Y%m%d")
-    start = (date.today() - timedelta(days=days * 2 + 10)).strftime("%Y%m%d")
     _MARGIN_LIMITER.acquire()
     try:
         df = _with_retries(
@@ -1710,7 +1745,9 @@ def margin_detail(
     if df is None or df.empty:
         return MarginResponse(symbol=symbol, rows=[])
 
-    df = df.sort_values("trade_date").tail(days)
+    df = df.sort_values("trade_date")
+    if not explicit_range:
+        df = df.tail(days)
     rows = [
         MarginRow(
             trade_date=str(r["trade_date"]),
@@ -1755,20 +1792,21 @@ class IndexDailyResponse(BaseModel):
 @app.get("/index-daily", response_model=IndexDailyResponse)
 def index_daily(
     index: str = Query("hs300", description="hs300 / zz1000 / cyb / sz50"),
-    days: int = Query(60, ge=1, le=250, description="lookback trading days"),
+    days: int = Query(60, ge=1, le=1000, description="legacy lookback trading days"),
+    start_date: str | None = Query(None, pattern=r"^\d{8}$"),
+    end_date: str | None = Query(None, pattern=r"^\d{8}$"),
 ):
     """Index daily klines from Tushare index_daily API.
 
     Used by the Prism strategy for market regime detection.
     """
-    ts_code = INDEX_CODES.get(index, "000300.SH")
-    cache_key = f"index_daily:{ts_code}:{days}"
+    ts_code = INDEX_CODES.get(index, index if "." in index else "000300.SH")
+    start, end, explicit_range = _checked_daily_range(days, start_date, end_date)
+    cache_key = f"index_daily:{ts_code}:{start}:{end}"
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
 
-    end = date.today().strftime("%Y%m%d")
-    start = (date.today() - timedelta(days=days * 2 + 10)).strftime("%Y%m%d")
     try:
         df = _with_retries(
             _pro.index_daily,
@@ -1783,7 +1821,9 @@ def index_daily(
     if df is None or df.empty:
         return IndexDailyResponse(index_code=ts_code, index_name=index, rows=[])
 
-    df = df.sort_values("trade_date").tail(days)
+    df = df.sort_values("trade_date")
+    if not explicit_range:
+        df = df.tail(days)
     rows = [
         IndexDailyRow(
             trade_date=str(r["trade_date"]),
