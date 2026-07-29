@@ -1,0 +1,15 @@
+{
+  "$schema": "ashare-production-race-lock/v1",
+  "locked_at": "2026-07-28T20:02:01+08:00",
+  "race_config": "production-race-v2.json",
+  "race_version": "3.0.0",
+  "contract_sha256": "0d20c16306e7db417d48fc3bcfa3037a81535dd63ec10c99983bfe60e4c22802",
+  "feature_version": "ashare-core-v5",
+  "feature_panel_sha256": "79a20b5ce9dbed68f9d6c7595e6246bebb19c0560ae84ab94b90956a68d00bba",
+  "feature_panel_end": "2026-07-27",
+  "repository_head_at_lock": "71a355bc0c437fa87e3fa6b77d8b72a20e353840",
+  "selection_data_end": "2024-12-31",
+  "final_evaluation_start": "2025-01-01",
+  "new_paid_data_required": false,
+  "post_lock_policy": "2025及以后结果只用于一次晋级判断，不允许用于调整候选公式、参数网格或门槛"
+}

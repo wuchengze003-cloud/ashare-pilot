@@ -1,0 +1,30 @@
+{
+  "schema_version": 2,
+  "status": "blocked_minute_data_coverage",
+  "generated_at": "2026-07-28T10:53:14.721124+00:00",
+  "contract_sha256": "72139cb423d231936224c5e6e9e7f8b0016bea424de1d3ee877075e8f6a7391c",
+  "daily_report_sha256": "53b530ad2b27487fbf5702a69730b672a1399e5410976f8901d2457c06569974",
+  "requirement_manifest_sha256": "6072a3650385d41a34c19bd08d81bf8f4adc064e79217d14884ebb88ff0cfdf4",
+  "minute_data_sha256": null,
+  "required_symbol_days": 15436,
+  "required_symbols": 360,
+  "available_symbol_days": 570,
+  "available_symbols": 14,
+  "minute_coverage_pct": 3.6926664939103397,
+  "missing_symbol_days": 14866,
+  "missing_preview": [
+    "sh600016@2023-01-04",
+    "sh600900@2023-01-04",
+    "sh601288@2023-01-04",
+    "sh601328@2023-01-04",
+    "sh601398@2023-01-04",
+    "sh601939@2023-01-04",
+    "sh601988@2023-01-04",
+    "sh600016@2023-01-05",
+    "sh600900@2023-01-05",
+    "sh601288@2023-01-05"
+  ],
+  "candidates": [],
+  "production_champion": null,
+  "note": "Minute execution research is fail-closed because the local data package does not cover every pre-registered symbol-day. No daily fallback, historical universe backfill, or gate relaxation is permitted."
+}

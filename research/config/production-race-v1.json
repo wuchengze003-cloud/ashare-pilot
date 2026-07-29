@@ -1,0 +1,141 @@
+{
+  "$schema": "ashare-production-race/v1",
+  "version": "2.0.0",
+  "objective": "maximize_net_oos_sharpe_with_upside_capture",
+  "research_lock": {
+    "locked_at": "2026-07-28T18:45:16+08:00",
+    "latest_parameter_selection_date": "2024-12-31",
+    "oos_and_frozen_not_used_for_v2_selection": true,
+    "note": "v2候选公式与参数网格在开发/验证结果确认后冻结；最终样本只用于一次晋级判断，不用于后续调参"
+  },
+  "capital_yuan": 1000000,
+  "champion_slots": 1,
+  "data": {
+    "minimum_complete_daily_trading_days": 1500,
+    "daily_start": "2018-01-01",
+    "minute_start": "2025-01-01",
+    "frequency": ["1d", "5min"],
+    "historical_universe": "csi800-point-in-time",
+    "historical_universe_file": "runtime/data/reference/csi800.txt",
+    "production_universe_file": "../web/data/universe.json"
+  },
+  "windows": {
+    "development": {"start": "2018-01-01", "end": "2022-12-31"},
+    "validation": {"start": "2023-01-01", "end": "2024-12-31"},
+    "oos": {"start": "2025-01-01", "end": "2026-02-23"},
+    "frozen": {"start": "2026-02-24", "end": "latest"}
+  },
+  "execution": {
+    "cost_model": "shared-production-v2",
+    "trading_constraints": "shared-production-v2",
+    "daily_signal_execution": "next_open",
+    "minute_signal_execution": "next_bar_open",
+    "candidate_ranking_signal": "raw_score",
+    "minimum_calibrated_net_return": 0.0,
+    "ranking_switch_buffer": 0.05,
+    "t_plus_1": true
+  },
+  "candidates": [
+    {
+      "id": "anchor-v1",
+      "family": "defensive_value_anchor",
+      "description": "低波动、低估值、大市值和中期均值回归，目标是以较低回撤持续参与市场",
+      "parameter_grid": {
+        "low_vol_weight": [0.5],
+        "value_weight": [0.3],
+        "large_cap_weight": [0.15],
+        "ranking_switch_buffer": [0.0, 0.01, 0.02]
+      },
+      "minute_parameter_grid": {
+        "confirmation_bars": [2, 3],
+        "vwap_buffer_bps": [0, 10],
+        "maximum_chase_pct": [0.02],
+        "hard_stop_pct": [0.04, 0.06],
+        "trailing_stop_pct": [0.06, 0.08],
+        "minimum_volume_ratio": [0],
+        "rebound_from_low_pct": [0]
+      }
+    },
+    {
+      "id": "tide-v3",
+      "family": "capital_flow_accumulation",
+      "description": "持续净流入和大单流入叠加低波动与容量约束，缺资金流时禁止晋级",
+      "parameter_grid": {
+        "moneyflow_weight": [0.35],
+        "large_order_weight": [0.15],
+        "low_vol_weight": [0.35],
+        "minimum_moneyflow_coverage": [0.8],
+        "ranking_switch_buffer": [0.1, 0.15, 0.2]
+      },
+      "minute_parameter_grid": {
+        "confirmation_bars": [2, 3],
+        "vwap_buffer_bps": [0, 10],
+        "maximum_chase_pct": [0.025],
+        "hard_stop_pct": [0.04, 0.06],
+        "trailing_stop_pct": [0.06, 0.08],
+        "minimum_volume_ratio": [1.0, 1.25],
+        "rebound_from_low_pct": [0]
+      }
+    },
+    {
+      "id": "prism-v3",
+      "family": "panic_recovery_reversal",
+      "description": "市场深弱后广度回升、个股止跌确认的反转，禁止在下跌途中直接抄底",
+      "parameter_grid": {
+        "reversal_weight": [0.45],
+        "position_weight": [0.2],
+        "wick_weight": [0.15],
+        "maximum_breadth_5": [0.35],
+        "minimum_breadth_rebound": [0.05],
+        "ranking_switch_buffer": [0.0, 0.02, 0.04]
+      },
+      "minute_parameter_grid": {
+        "confirmation_bars": [2, 3],
+        "vwap_buffer_bps": [-10, 0],
+        "maximum_chase_pct": [0.03],
+        "hard_stop_pct": [0.04, 0.06],
+        "trailing_stop_pct": [0.06, 0.08],
+        "minimum_volume_ratio": [0],
+        "rebound_from_low_pct": [0.008, 0.012]
+      }
+    }
+  ],
+  "calibration": {
+    "method": "train_decile_mean",
+    "label": "label_return_5",
+    "deciles": 10,
+    "minimum_observations_per_decile": 200
+  },
+  "selection": {
+    "validation_primary": "net_sharpe",
+    "validation_penalties": ["max_drawdown", "turnover"],
+    "final_primary": "median_oos_fold_sharpe",
+    "tiebreakers": ["upside_capture", "calmar", "lower_turnover"],
+    "parameter_selection_may_use": ["development", "validation"],
+    "parameter_selection_must_not_use": ["oos", "frozen"]
+  },
+  "promotion_gates": {
+    "maximum_drawdown_pct": 15,
+    "minimum_validation_sharpe": 1.25,
+    "minimum_oos_folds": 4,
+    "minimum_closed_trades": 100,
+    "minimum_oos_sharpe": 1.5,
+    "minimum_frozen_sharpe": 1.25,
+    "minimum_median_oos_fold_sharpe": 1.0,
+    "minimum_positive_oos_fold_share": 0.75,
+    "minimum_oos_annualized_return_pct": 15,
+    "minimum_oos_calmar": 1.0,
+    "minimum_upside_capture": 0.75,
+    "maximum_downside_capture": 0.75,
+    "minimum_bootstrap_probability_sharpe_positive": 0.975,
+    "double_cost_total_return_must_be_positive": true,
+    "minimum_double_cost_oos_sharpe": 0.75,
+    "all_required_data_quality_gates_must_pass": true,
+    "minute_overlay_must_not_reduce_sharpe": true
+  },
+  "bootstrap": {
+    "seed": 20260728,
+    "samples": 2000,
+    "block_trading_days": 20
+  }
+}

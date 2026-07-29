@@ -1,0 +1,138 @@
+{
+  "$schema": "ashare-production-race/v2",
+  "version": "3.0.0",
+  "objective": "maximize_net_oos_sharpe_subject_to_drawdown_and_upside_capture",
+  "research_lock": {
+    "locked_at": "2026-07-28T20:02:01+08:00",
+    "latest_parameter_selection_date": "2024-12-31",
+    "prior_final_period_aggregate_awareness": true,
+    "new_candidate_formulas_not_evaluated_after_2024_before_lock": true,
+    "post_lock_rule": "2025及以后数据只允许执行一次晋级验收，不允许回看调参",
+    "evidence_class": "retrospective_provisional"
+  },
+  "capital_yuan": 1000000,
+  "champion_slots": 1,
+  "data": {
+    "minimum_complete_daily_trading_days": 1500,
+    "daily_start": "2018-01-01",
+    "frequency": ["1d"],
+    "fixed_current_tushare_package": true,
+    "new_paid_data_required": false,
+    "minute_data_policy": "candidate_specific_fail_closed",
+    "historical_universe": "csi800-point-in-time",
+    "historical_universe_file": "runtime/data/reference/csi800.txt",
+    "production_universe_file": "../web/data/universe.json"
+  },
+  "windows": {
+    "development": {"start": "2018-01-01", "end": "2022-12-31"},
+    "validation": {"start": "2023-01-01", "end": "2024-12-31"},
+    "oos": {"start": "2025-01-01", "end": "2026-05-31"},
+    "frozen": {"start": "2026-06-01", "end": "latest"}
+  },
+  "execution": {
+    "cost_model": "shared-production-v2",
+    "trading_constraints": "shared-production-v2",
+    "daily_signal_execution": "next_open",
+    "candidate_ranking_signal": "raw_score",
+    "minimum_calibrated_net_return": 0.0,
+    "ranking_switch_buffer": 0.05,
+    "t_plus_1": true
+  },
+  "candidates": [
+    {
+      "id": "harbor-v1",
+      "family": "defensive_value_flow",
+      "description": "低波动与估值安全垫为主，十日资金流和大市值用于确认，目标是降低下行参与并保留趋势收益",
+      "signal_frequency": "1d",
+      "calibration_label": "label_excess_return_10",
+      "label_horizon_bars": 10,
+      "parameter_grid": {
+        "low_vol_weight": [0.4],
+        "value_weight": [0.25],
+        "moneyflow_weight": [0.15],
+        "large_cap_weight": [0.2],
+        "minimum_moneyflow_coverage": [0.5, 0.8],
+        "ranking_switch_buffer": [0.03, 0.05],
+        "minimum_holding_bars": [10]
+      }
+    },
+    {
+      "id": "surge-v1",
+      "family": "confirmed_risk_on_participation",
+      "description": "仅在市场广度和中期趋势确认后参与上涨，以低波动、六十日动量、资金流和容量共同排序",
+      "signal_frequency": "1d",
+      "calibration_label": "label_excess_return_10",
+      "label_horizon_bars": 10,
+      "parameter_grid": {
+        "low_vol_weight": [0.55],
+        "momentum_weight": [0.15],
+        "moneyflow_weight": [0.15],
+        "large_cap_weight": [0.15],
+        "minimum_moneyflow_coverage": [0.5],
+        "minimum_market_breadth": [0.5],
+        "minimum_market_return_mean_20": [-0.003],
+        "minimum_stock_momentum_60": [0.0],
+        "ranking_switch_buffer": [0.03, 0.05],
+        "minimum_holding_bars": [10]
+      }
+    },
+    {
+      "id": "flow-v1",
+      "family": "persistent_capital_flow",
+      "description": "五日净流入和大单流入主导，低波动约束尾部风险，并排除短线接近涨停的追价交易",
+      "signal_frequency": "1d",
+      "calibration_label": "label_excess_return_10",
+      "label_horizon_bars": 10,
+      "parameter_grid": {
+        "moneyflow_weight": [0.45],
+        "large_order_weight": [0.15],
+        "low_vol_weight": [0.4],
+        "minimum_moneyflow_coverage": [0.8],
+        "ranking_switch_buffer": [0.03, 0.05],
+        "minimum_holding_bars": [10]
+      }
+    }
+  ],
+  "calibration": {
+    "method": "train_decile_mean",
+    "deciles": 10,
+    "minimum_observations_per_decile": 200
+  },
+  "selection": {
+    "validation_primary": "positive_fold_share_then_median_fold_sharpe",
+    "validation_penalties": ["max_drawdown", "turnover", "insufficient_trades"],
+    "final_primary": "median_oos_fold_sharpe",
+    "tiebreakers": ["upside_capture", "calmar", "lower_turnover"],
+    "parameter_selection_may_use": ["development", "validation"],
+    "parameter_selection_must_not_use": ["oos", "frozen"],
+    "validation_fold_trading_days": 126,
+    "oos_fold_trading_days": 63
+  },
+  "promotion_gates": {
+    "maximum_drawdown_pct": 15,
+    "minimum_validation_sharpe": 1.25,
+    "minimum_oos_folds": 4,
+    "minimum_closed_trades": 35,
+    "minimum_oos_sharpe": 1.5,
+    "minimum_frozen_sharpe": 0.5,
+    "minimum_median_oos_fold_sharpe": 1.0,
+    "minimum_positive_oos_fold_share": 0.75,
+    "minimum_oos_annualized_return_pct": 15,
+    "minimum_oos_calmar": 1.0,
+    "minimum_upside_capture": 0.75,
+    "maximum_downside_capture": 0.75,
+    "minimum_bootstrap_probability_sharpe_positive": 0.975,
+    "double_cost_total_return_must_be_positive": true,
+    "minimum_double_cost_oos_sharpe": 0.75,
+    "minimum_validation_trading_days": 400,
+    "minimum_oos_trading_days": 250,
+    "minimum_frozen_trading_days": 30,
+    "all_required_data_quality_gates_must_pass": true,
+    "minute_overlay_must_not_reduce_sharpe": true
+  },
+  "bootstrap": {
+    "seed": 20260728,
+    "samples": 2000,
+    "block_trading_days": 20
+  }
+}
