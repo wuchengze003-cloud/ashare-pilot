@@ -3,7 +3,7 @@
 // economic contract.  The file is resolved relative to the repo root, which
 // is two levels up from web/lib/.
 import fs from "node:fs";
-import path from "node:path";
+import { repoConfigPath } from "./repoConfig";
 
 export interface CostModel {
   buyCommissionBps: number;
@@ -12,6 +12,10 @@ export interface CostModel {
   baseSlippageBps: number;
   minimumCommissionYuan: number;
   impactModel: string;
+  impactCoefficient: number;
+  impactVolatilityLookback: number;
+  maxImpactBps: number;
+  missingTurnoverPenaltyBps: number;
 }
 
 export interface CostConfig {
@@ -19,27 +23,45 @@ export interface CostConfig {
   sellCommissionBps: number;
   stampDutyBps: number;
   slippageBps: number;
+  minimumCommissionYuan?: number;
+  impactModel?: string;
+  impactCoefficient?: number;
+  impactVolatilityLookback?: number;
+  maxImpactBps?: number;
+  missingTurnoverPenaltyBps?: number;
 }
 
 let cached: CostModel | null = null;
 
-function repoRoot(): string {
-  // web/lib/costConfig.ts → web/lib → web → repo root
-  return path.resolve(__dirname, "..", "..");
-}
-
 export function loadCostModel(): CostModel {
   if (cached) return cached;
-  const filePath = path.join(repoRoot(), "config", "cost-model.json");
+  const filePath = repoConfigPath("cost-model.json");
   const raw = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, unknown>;
-  cached = {
+  const parsed: CostModel = {
     buyCommissionBps: Number(raw.buy_commission_bps),
     sellCommissionBps: Number(raw.sell_commission_bps),
     stampDutyBps: Number(raw.stamp_duty_bps),
     baseSlippageBps: Number(raw.base_slippage_bps),
     minimumCommissionYuan: Number(raw.minimum_commission_yuan),
     impactModel: String(raw.impact_model ?? "sqrt-volume"),
+    impactCoefficient: Number(raw.impact_coefficient ?? 0),
+    impactVolatilityLookback: Number(raw.impact_volatility_lookback ?? 20),
+    maxImpactBps: Number(raw.max_impact_bps ?? 0),
+    missingTurnoverPenaltyBps: Number(raw.missing_turnover_penalty_bps ?? 0),
   };
+  for (const [key, value] of Object.entries(parsed)) {
+    if (key === "impactModel") continue;
+    if (!Number.isFinite(value) || Number(value) < 0) {
+      throw new Error(`invalid cost model ${key}: ${String(value)}`);
+    }
+  }
+  if (!Number.isInteger(parsed.impactVolatilityLookback) || parsed.impactVolatilityLookback < 2) {
+    throw new Error("impactVolatilityLookback must be an integer >= 2");
+  }
+  if (parsed.impactModel !== "square-root-participation") {
+    throw new Error(`unsupported impact model: ${parsed.impactModel}`);
+  }
+  cached = parsed;
   return cached;
 }
 
@@ -50,6 +72,12 @@ export function toCostConfig(model: CostModel = loadCostModel()): CostConfig {
     sellCommissionBps: model.sellCommissionBps,
     stampDutyBps: model.stampDutyBps,
     slippageBps: model.baseSlippageBps,
+    minimumCommissionYuan: model.minimumCommissionYuan,
+    impactModel: model.impactModel,
+    impactCoefficient: model.impactCoefficient,
+    impactVolatilityLookback: model.impactVolatilityLookback,
+    maxImpactBps: model.maxImpactBps,
+    missingTurnoverPenaltyBps: model.missingTurnoverPenaltyBps,
   };
 }
 

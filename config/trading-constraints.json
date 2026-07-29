@@ -1,6 +1,6 @@
 {
-  "$schema": "trading-constraints/v1",
-  "description": "统一交易约束配置，Web 和 Research 共用。所有板块统一处理，不排除科创板。",
+  "$schema": "trading-constraints/v2",
+  "description": "Web、Research 和生产信号共用的 A 股交易与风险约束。支持日线和 5 分钟信号，不排除科创板。",
   "boards": {
     "allowed": ["main", "star", "chinext", "bse"],
     "note": "688 科创板不排除，所有板块统一处理",
@@ -26,17 +26,22 @@
   },
   "risk_management": {
     "initial_capital_yuan": 1000000,
-    "max_drawdown_pct": 20,
+    "max_drawdown_pct": 15,
     "max_single_position_pct": 25,
     "max_single_theme_pct": 40,
     "max_positions": 5,
-    "note": "参考开源量化项目设计：初始资金100万，最大回撤20%，单只25%，单主题40%"
+    "note": "初始资金100万；15%为策略晋级和生产降险上限，不代表未来回撤保证。"
   },
   "execution": {
     "decision_timing": "post_close",
     "execution_price": "next_open",
+    "supported_signal_frequencies": ["1d", "5min"],
+    "intraday_execution_price": "next_bar_open",
+    "t_plus_1": true,
+    "lot_size": 100,
+    "max_order_bar_amount_pct": 1,
     "min_holding_bars": 5,
     "rebalance_threshold_pct": 5,
-    "note": "收盘后决策，次日开盘执行"
+    "note": "日线信号默认收盘决策、次日开盘执行；分钟信号必须在5分钟收盘确认后于下一根开盘执行，并遵守T+1。"
   }
 }

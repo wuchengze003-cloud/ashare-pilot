@@ -26,6 +26,8 @@ def test_evaluation_generates_signal_and_next_open_portfolio_metrics(tmp_path):
                     "next_close": 10.0 * (1 + realized / 5),
                     "next_can_buy": True,
                     "next_can_sell": True,
+                    "amount": 100_000_000.0,
+                    "volatility_20": 0.02,
                     "fold": day_index // 5,
                 }
             )
@@ -63,6 +65,8 @@ def test_randomized_labels_remove_rank_advantage(tmp_path):
                     "next_close": 10.0,
                     "next_can_buy": True,
                     "next_can_sell": True,
+                    "amount": 100_000_000.0,
+                    "volatility_20": 0.02,
                     "fold": 0,
                 }
             )

@@ -30,6 +30,11 @@ class TradingConstraints:
     max_single_position_pct: float
     max_single_theme_pct: float
     max_positions: int
+    supported_signal_frequencies: list[str]
+    intraday_execution_price: str
+    t_plus_1: bool
+    lot_size: int
+    max_order_bar_amount_pct: float
     min_holding_bars: int
     rebalance_threshold_pct: float
     execution_price: str
@@ -38,8 +43,10 @@ class TradingConstraints:
 
     @property
     def round_trip_fee_bps(self) -> float:
-        """Alias for compatibility — delegates to cost_config."""
-        return 16.0
+        """Alias for compatibility, derived from the shared cost model."""
+        from .cost_config import load_cost_model
+
+        return load_cost_model().round_trip_bps
 
 
 _cached: TradingConstraints | None = None
@@ -62,6 +69,15 @@ def load_trading_constraints() -> TradingConstraints:
         max_single_position_pct=data["risk_management"]["max_single_position_pct"],
         max_single_theme_pct=data["risk_management"]["max_single_theme_pct"],
         max_positions=data["risk_management"]["max_positions"],
+        supported_signal_frequencies=data["execution"][
+            "supported_signal_frequencies"
+        ],
+        intraday_execution_price=data["execution"]["intraday_execution_price"],
+        t_plus_1=bool(data["execution"]["t_plus_1"]),
+        lot_size=int(data["execution"]["lot_size"]),
+        max_order_bar_amount_pct=float(
+            data["execution"]["max_order_bar_amount_pct"]
+        ),
         min_holding_bars=data["execution"]["min_holding_bars"],
         rebalance_threshold_pct=data["execution"]["rebalance_threshold_pct"],
         execution_price=data["execution"]["execution_price"],
@@ -86,7 +102,8 @@ def price_limit_fraction(symbol: str, name: str = "") -> float:
 
 
 def is_limit_up(close: float, prev_close: float, symbol: str, name: str = "") -> bool:
+    cfg = load_trading_constraints()
     frac = price_limit_fraction(symbol, name)
     if prev_close <= 0:
         return False
-    return close / prev_close - 1 >= frac - 0.003
+    return close / prev_close - 1 >= frac - cfg.limit_slack

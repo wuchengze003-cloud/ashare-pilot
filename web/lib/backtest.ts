@@ -4,22 +4,16 @@
 import type { Kline } from "./pyserver";
 import type { SymbolSnapshot, Signal } from "./strategyTypes";
 import { ruleBasedScorer } from "./dashboardBacktest";
+import type { CostConfig } from "./costConfig";
+import {
+  configuredPriceLimitFraction,
+  loadTradingConstraints,
+} from "./tradingConstraints";
 import {
   isStrategyEntryAsOf,
   resolveEntryAsOf,
   type UniverseEntry,
 } from "./universe";
-
-export interface CostConfig {
-  /** Commission on buy side, in basis points. Default 2.5bp. */
-  buyCommissionBps?: number;
-  /** Commission on sell side, in basis points. Default 2.5bp. */
-  sellCommissionBps?: number;
-  /** A-share stamp duty on sell side only, in basis points. Default 5bp (0.05%). */
-  stampDutyBps?: number;
-  /** Slippage per side, in basis points. Default 3bp. */
-  slippageBps?: number;
-}
 
 export interface BacktestConfig {
   startCash: number;
@@ -86,6 +80,13 @@ export interface Trade {
   targetWeightBefore: number;
   targetWeightAfter: number;
   pnlPct?: number | null;
+  grossNotionalYuan?: number;
+  commissionYuan?: number;
+  stampDutyYuan?: number;
+  slippageYuan?: number;
+  /** Negative for buys, positive for sells/reductions. */
+  netCashFlowYuan?: number;
+  effectivePrice?: number;
 }
 
 export interface RoundTripEpisode {
@@ -167,16 +168,17 @@ function latestFundamentalAsOf(
 // A-share daily price-limit (涨跌停) thresholds by board, as a fraction of the
 // prior close. Main board ±10% (ST ±5%), 科创板/创业板 ±20%, 北交所 ±30%.
 export function priceLimitFraction(symbol: string, name: string): number {
-  const code = symbol.replace(/^(sh|sz|bj)/i, "").replace(/\.(sh|sz|bj)$/i, "");
-  if (/^(688|300|301)/.test(code)) return 0.2; // 科创板 / 创业板
-  if (/^(4|8|92)/.test(code)) return 0.3; // 北交所
-  return /ST/i.test(name) ? 0.05 : 0.1; // 主板（ST 减半）
+  return configuredPriceLimitFraction(symbol, name);
 }
 
-// Klines are 前复权 (qfq) adjusted, which preserves daily returns, so a 涨/跌停
-// lock still shows up as a move at the board limit. The 0.3pp slack absorbs the
-// exchange's 0.01-yuan rounding of the limit price.
-const LIMIT_SLACK = 0.003;
+interface TradeCostBreakdown {
+  grossNotionalYuan: number;
+  commissionYuan: number;
+  stampDutyYuan: number;
+  slippageYuan: number;
+  netCashFlowYuan: number;
+  effectivePrice: number;
+}
 
 export type Progress =
   | { phase: "signals"; done: number; total: number }
@@ -226,8 +228,16 @@ export async function runBacktest(
     rebalanceEveryNDays: decisionEveryNDays,
     decisionEveryNDays,
     executionPrice: "next_open",
+    maxPositions: Math.min(
+      Math.max(1, Math.floor(cfg.maxPositions)),
+      loadTradingConstraints().maxPositions,
+    ),
     sharpeTarget: cfg.sharpeTarget ?? 3,
   };
+  const tradingConstraints = loadTradingConstraints();
+  const lotSize = tradingConstraints.lotSize;
+  const limitSlack = tradingConstraints.limitSlack;
+  const cc = cfg.costConfig;
   const dates = unionTradingDates(series).filter(
     (d) => d >= cfg.startDate && d <= cfg.endDate,
   );
@@ -255,11 +265,130 @@ export async function runBacktest(
   };
   const atLimitUp = (j: number, date: string, close: number): boolean => {
     const r = dayReturn(j, date, close);
-    return r !== null && r >= limitFrac[j] - LIMIT_SLACK;
+    return r !== null && r >= limitFrac[j] - limitSlack;
   };
   const atLimitDown = (j: number, date: string, close: number): boolean => {
     const r = dayReturn(j, date, close);
-    return r !== null && r <= -(limitFrac[j] - LIMIT_SLACK);
+    return r !== null && r <= -(limitFrac[j] - limitSlack);
+  };
+
+  // Execution at the open may only use liquidity and volatility observed
+  // through the previous close. Full execution-day turnover would be future
+  // information, so the impact model uses trailing values only.
+  const executionInputsByDate = series.map((symbolSeries) => {
+    const sorted = [...symbolSeries.klines].sort((a, b) => (a.date < b.date ? -1 : 1));
+    const lookback = Math.max(2, cc?.impactVolatilityLookback ?? 20);
+    const result = new Map<string, { volatility: number | null; medianAmount: number | null }>();
+    const returns: number[] = [];
+    const amounts: number[] = [];
+    for (let index = 0; index < sorted.length; index++) {
+      const row = sorted[index];
+      const visibleReturns = returns.slice(-lookback);
+      const mean = visibleReturns.length > 0
+        ? visibleReturns.reduce((sum, value) => sum + value, 0) / visibleReturns.length
+        : 0;
+      const variance = visibleReturns.length >= 2
+        ? visibleReturns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / visibleReturns.length
+        : 0;
+      const visibleAmounts = amounts.slice(-lookback).sort((a, b) => a - b);
+      const middle = Math.floor(visibleAmounts.length / 2);
+      const medianAmount = visibleAmounts.length === 0
+        ? null
+        : visibleAmounts.length % 2 === 0
+          ? (visibleAmounts[middle - 1] + visibleAmounts[middle]) / 2
+          : visibleAmounts[middle];
+      result.set(row.date, {
+        volatility: visibleReturns.length >= 2 ? Math.sqrt(variance) : null,
+        medianAmount,
+      });
+      if (index > 0 && sorted[index - 1].close > 0) {
+        returns.push(row.close / sorted[index - 1].close - 1);
+      }
+      if (row.amount !== undefined && Number.isFinite(row.amount) && row.amount > 0) {
+        amounts.push(row.amount);
+      }
+    }
+    return result;
+  });
+
+  const slippageBpsFor = (
+    symbolPosition: number | undefined,
+    tradeDate: string,
+    notional: number,
+  ): number => {
+    if (!cc) return 0;
+    const base = cc.slippageBps ?? 0;
+    if (
+      symbolPosition === undefined ||
+      cc.impactModel !== "square-root-participation" ||
+      (cc.impactCoefficient ?? 0) <= 0
+    ) {
+      return base;
+    }
+    const inputs = executionInputsByDate[symbolPosition].get(tradeDate);
+    if (
+      !inputs ||
+      inputs.volatility === null ||
+      inputs.medianAmount === null ||
+      inputs.medianAmount <= 0
+    ) {
+      return base + (cc.missingTurnoverPenaltyBps ?? 0);
+    }
+    const participation = Math.max(0, notional / inputs.medianAmount);
+    const impact = Math.min(
+      cc.maxImpactBps ?? Number.POSITIVE_INFINITY,
+      (cc.impactCoefficient ?? 0) * inputs.volatility * Math.sqrt(participation) * 10_000,
+    );
+    return base + impact;
+  };
+
+  const tradeCosts = (
+    side: "buy" | "sell",
+    symbolPosition: number | undefined,
+    tradeDate: string,
+    sharesToTrade: number,
+    rawPrice: number,
+  ): TradeCostBreakdown => {
+    const grossNotionalYuan = sharesToTrade * rawPrice;
+    if (!cc) {
+      const legacyCost = grossNotionalYuan * (cfg.feeBps / 10_000);
+      const netCashFlowYuan = side === "buy"
+        ? -(grossNotionalYuan + legacyCost)
+        : grossNotionalYuan - legacyCost;
+      return {
+        grossNotionalYuan,
+        commissionYuan: legacyCost,
+        stampDutyYuan: 0,
+        slippageYuan: 0,
+        netCashFlowYuan,
+        effectivePrice: Math.abs(netCashFlowYuan) / sharesToTrade,
+      };
+    }
+    const commissionBps = side === "buy"
+      ? cc.buyCommissionBps ?? 0
+      : cc.sellCommissionBps ?? 0;
+    const commissionYuan = Math.max(
+      grossNotionalYuan * commissionBps / 10_000,
+      cc.minimumCommissionYuan ?? 0,
+    );
+    const stampDutyYuan = side === "sell"
+      ? grossNotionalYuan * (cc.stampDutyBps ?? 0) / 10_000
+      : 0;
+    const slippageYuan = grossNotionalYuan
+      * slippageBpsFor(symbolPosition, tradeDate, grossNotionalYuan)
+      / 10_000;
+    const totalCosts = commissionYuan + stampDutyYuan + slippageYuan;
+    const netCashFlowYuan = side === "buy"
+      ? -(grossNotionalYuan + totalCosts)
+      : grossNotionalYuan - totalCosts;
+    return {
+      grossNotionalYuan,
+      commissionYuan,
+      stampDutyYuan,
+      slippageYuan,
+      netCashFlowYuan,
+      effectivePrice: Math.abs(netCashFlowYuan) / sharesToTrade,
+    };
   };
 
   const t0 = Date.now();
@@ -333,15 +462,6 @@ export async function runBacktest(
   const lastPrice: Record<string, number> = {};
   const equityCurve: PortfolioBar[] = [];
   const trades: Trade[] = [];
-  // Cost model: granular A-share costs when costConfig is provided,
-  // otherwise fall back to legacy symmetric feeBps.
-  const cc = cfg.costConfig;
-  const buyFee = cc
-    ? ((cc.buyCommissionBps ?? 2.5) + (cc.slippageBps ?? 3)) / 10_000
-    : cfg.feeBps / 10_000;
-  const sellFee = cc
-    ? ((cc.sellCommissionBps ?? 2.5) + (cc.stampDutyBps ?? 5) + (cc.slippageBps ?? 3)) / 10_000
-    : cfg.feeBps / 10_000;
   let realizedTrades = 0;
   let winningTrades = 0;
   let tradedValue = 0;
@@ -359,9 +479,9 @@ export async function runBacktest(
   const canOrdinarySell = (sym: string, i: number): boolean =>
     !normalizedCfg.minHoldBars || heldBars(sym, i) >= normalizedCfg.minHoldBars;
 
-  const recordSellWin = (sym: string, price: number) => {
+  const recordSellWin = (sym: string, effectiveExitPrice: number) => {
     if ((avgCost[sym] ?? 0) <= 0) return null;
-    const pnlPct = (price / avgCost[sym] - 1) * 100;
+    const pnlPct = (effectiveExitPrice / avgCost[sym] - 1) * 100;
     realizedTrades++;
     if (pnlPct > 0) winningTrades++;
     return pnlPct;
@@ -377,9 +497,10 @@ export async function runBacktest(
     reason: string,
     targetWeightBefore: number,
     targetWeightAfter: number,
+    costs: TradeCostBreakdown,
     pnlPct?: number | null,
   ) => {
-    tradedValue += sh * price;
+    tradedValue += costs.grossNotionalYuan;
     trades.push({
       date,
       decisionDate,
@@ -393,6 +514,12 @@ export async function runBacktest(
       targetWeightBefore,
       targetWeightAfter,
       pnlPct,
+      grossNotionalYuan: costs.grossNotionalYuan,
+      commissionYuan: costs.commissionYuan,
+      stampDutyYuan: costs.stampDutyYuan,
+      slippageYuan: costs.slippageYuan,
+      netCashFlowYuan: costs.netCashFlowYuan,
+      effectivePrice: costs.effectivePrice,
     });
   };
 
@@ -442,12 +569,27 @@ export async function runBacktest(
     const hasExplicitTargetWeights =
       explicitTargetWeightSum > 0 && explicitTargetWeightSum <= 1 + 1e-6;
     const targetTotal = topBuys.reduce((sum, s) => sum + s.size * s.confidence, 0) || 1;
-    const targetWeights = new Map(
-      topBuys.map((s) => [
-        s.symbol,
-        hasExplicitTargetWeights ? s.size : (s.size * s.confidence) / targetTotal,
-      ] as const),
-    );
+    const maxSingleWeight = tradingConstraints.maxSinglePositionPct / 100;
+    const maxThemeWeight = tradingConstraints.maxSingleThemePct / 100;
+    const themeWeights = new Map<string, number>();
+    const targetWeights = new Map<string, number>();
+    for (const signal of topBuys) {
+      const symbolPosition = symbolIndex.get(signal.symbol);
+      const theme = symbolPosition === undefined
+        ? "未分类"
+        : resolveEntryAsOf(series[symbolPosition].entry, decisionDate ?? date).theme;
+      const rawWeight = hasExplicitTargetWeights
+        ? signal.size
+        : (signal.size * signal.confidence) / targetTotal;
+      const remainingThemeCapacity = Math.max(
+        0,
+        maxThemeWeight - (themeWeights.get(theme) ?? 0),
+      );
+      const constrainedWeight = Math.min(rawWeight, maxSingleWeight, remainingThemeCapacity);
+      if (constrainedWeight <= 0) continue;
+      targetWeights.set(signal.symbol, constrainedWeight);
+      themeWeights.set(theme, (themeWeights.get(theme) ?? 0) + constrainedWeight);
+    }
     const hardSellSymbols = new Set(signals.filter(isHardExit).map((s) => s.symbol));
 
     // A fresh selected buy cancels a stale deferred ordinary sell/reduction.
@@ -496,8 +638,9 @@ export async function runBacktest(
       const targetWeightBefore = beforeEquity > 0 ? (held * px) / beforeEquity : 0;
       const sh = requestedShares === "all" ? held : Math.min(held, requestedShares);
       if (sh <= 0) return false;
-      cash += sh * px * (1 - sellFee);
-      const pnlPct = recordSellWin(sym, px);
+      const costs = tradeCosts("sell", j, date, sh, px);
+      cash += costs.netCashFlowYuan;
+      const pnlPct = recordSellWin(sym, costs.effectivePrice);
       shares[sym] = Math.max(0, held - sh);
       if (shares[sym] === 0) avgCost[sym] = 0;
       pushTrade(
@@ -510,6 +653,7 @@ export async function runBacktest(
         reason,
         targetWeightBefore,
         shares[sym] > 0 ? targetWeightAfter : 0,
+        costs,
         pnlPct,
       );
       pendingSell[sym] = undefined;
@@ -581,7 +725,7 @@ export async function runBacktest(
         const currentWeight = preEquity > 0 ? (held * px) / preEquity : 0;
         if (currentWeight <= targetWeight + driftThreshold) continue;
         const excessValue = (currentWeight - targetWeight) * preEquity;
-        const sh = Math.floor(excessValue / px / 100) * 100;
+        const sh = Math.floor(excessValue / px / lotSize) * lotSize;
         executeSellOrder(
           sym,
           sh,
@@ -607,15 +751,19 @@ export async function runBacktest(
         const currentWeight = postSellEquity > 0 ? currentValue / postSellEquity : 0;
         if (currentWeight >= targetWeight - driftThreshold) continue;
         const alloc = Math.max(0, targetWeight * postSellEquity - currentValue);
-        const sh = Math.floor(alloc / (px * (1 + buyFee)) / 100) * 100;
+        let sh = Math.floor(alloc / px / lotSize) * lotSize;
         if (sh <= 0) continue;
-        const cost = sh * px * (1 + buyFee);
-        if (cost > cash) continue;
-        cash -= cost;
+        let costs = tradeCosts("buy", j, date, sh, px);
+        while (sh > 0 && -costs.netCashFlowYuan > cash) {
+          sh -= lotSize;
+          if (sh > 0) costs = tradeCosts("buy", j, date, sh, px);
+        }
+        if (sh <= 0 || -costs.netCashFlowYuan > cash) continue;
+        cash += costs.netCashFlowYuan;
         const oldShares = shares[sig.symbol] ?? 0;
         const oldCost = (avgCost[sig.symbol] ?? 0) * oldShares;
         shares[sig.symbol] = oldShares + sh;
-        avgCost[sig.symbol] = (oldCost + sh * px) / shares[sig.symbol];
+        avgCost[sig.symbol] = (oldCost - costs.netCashFlowYuan) / shares[sig.symbol];
         if (oldShares === 0) lastBuyBar[sig.symbol] = i;
         pushTrade(
           date,
@@ -627,6 +775,7 @@ export async function runBacktest(
           sig.rationale || "进入明日目标组合",
           currentWeight,
           targetWeight,
+          costs,
           null,
         );
         pendingSell[sig.symbol] = undefined;
@@ -681,7 +830,7 @@ export async function runBacktest(
   const winRatePct = realizedTrades > 0 ? (winningTrades / realizedTrades) * 100 : 0;
 
   // Round-trip episode computation: one episode = open position → fully close.
-  const episodes = computeRoundTripEpisodes(trades, buyFee, sellFee);
+  const episodes = computeRoundTripEpisodes(trades, cfg.feeBps / 10_000);
   const roundTrips = episodes.length;
   const roundTripWins = episodes.filter((ep) => ep.pnlPct > 0).length;
   const roundTripWinRatePct = roundTrips > 0 ? (roundTripWins / roundTrips) * 100 : 0;
@@ -715,44 +864,56 @@ export async function runBacktest(
  *  Partial reductions are accumulated into the episode's exit cash flows. */
 function computeRoundTripEpisodes(
   trades: Trade[],
-  buyFee: number,
-  sellFee: number,
+  legacyFeeRate: number,
 ): RoundTripEpisode[] {
   const episodes: RoundTripEpisode[] = [];
   // Open episodes keyed by symbol
   const open = new Map<string, {
     entryDate: string;
     totalShares: number;
-    totalCost: number; // shares * price * (1 + buyFee)
+    totalCost: number;
+    rawEntryNotional: number;
     exitShares: number;
-    exitProceeds: number; // shares * price * (1 - sellFee)
+    exitProceeds: number;
+    rawExitNotional: number;
   }>();
 
   for (const t of trades) {
     if (t.side === "buy") {
       const existing = open.get(t.symbol);
+      const rawNotional = t.grossNotionalYuan ?? t.shares * t.price;
+      const cashOutflow = t.netCashFlowYuan !== undefined
+        ? -t.netCashFlowYuan
+        : rawNotional * (1 + legacyFeeRate);
       if (existing) {
         existing.totalShares += t.shares;
-        existing.totalCost += t.shares * t.price * (1 + buyFee);
+        existing.totalCost += cashOutflow;
+        existing.rawEntryNotional += rawNotional;
       } else {
         open.set(t.symbol, {
           entryDate: t.tradeDate,
           totalShares: t.shares,
-          totalCost: t.shares * t.price * (1 + buyFee),
+          totalCost: cashOutflow,
+          rawEntryNotional: rawNotional,
           exitShares: 0,
           exitProceeds: 0,
+          rawExitNotional: 0,
         });
       }
     } else {
       // sell or reduce
       const ep = open.get(t.symbol);
       if (!ep) continue;
+      const rawNotional = t.grossNotionalYuan ?? t.shares * t.price;
       ep.exitShares += t.shares;
-      ep.exitProceeds += t.shares * t.price * (1 - sellFee);
+      ep.exitProceeds += t.netCashFlowYuan !== undefined
+        ? t.netCashFlowYuan
+        : rawNotional * (1 - legacyFeeRate);
+      ep.rawExitNotional += rawNotional;
       if (ep.exitShares >= ep.totalShares) {
         // Position fully closed — record episode
-        const avgEntry = ep.totalCost / ep.totalShares;
-        const avgExit = ep.exitProceeds / ep.exitShares;
+        const avgEntry = ep.rawEntryNotional / ep.totalShares;
+        const avgExit = ep.rawExitNotional / ep.exitShares;
         const bars = Math.max(1, Math.round(
           (new Date(t.tradeDate).getTime() - new Date(ep.entryDate).getTime()) / 86_400_000,
         ));
@@ -761,8 +922,8 @@ function computeRoundTripEpisodes(
           entryDate: ep.entryDate,
           exitDate: t.tradeDate,
           shares: ep.totalShares,
-          avgEntryPrice: avgEntry / (1 + buyFee), // raw price
-          avgExitPrice: avgExit / (1 - sellFee),   // raw price
+          avgEntryPrice: avgEntry,
+          avgExitPrice: avgExit,
           pnlPct: (ep.exitProceeds / ep.totalCost - 1) * 100,
           bars,
         });

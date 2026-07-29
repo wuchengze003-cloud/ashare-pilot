@@ -7,8 +7,8 @@ Models real-world A-share trading constraints:
 - Suspension: no execution on suspended days.
 - Bar-close confirmation: signal confirmed at bar close, execution at next bar open.
 - Capacity: single order cannot exceed 1% of execution bar's turnover.
-- Fees: default 10 bps per side.
-- Slippage: default 5 bps per side.
+- Fees: shared buy/sell commission, sell stamp duty, and minimum commission.
+- Slippage: shared production cost model.
 - Fail closed: missing bars, adj_factor, or limit prices → no_fill.
 """
 
@@ -21,29 +21,44 @@ from typing import Any
 
 import polars as pl
 
+from .cost_config import load_cost_model
+from .trading_constraints import load_trading_constraints
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_FEE_BPS = 10.0
-DEFAULT_SLIPPAGE_BPS = 5.0
-DEFAULT_CAPACITY_PCT = 1.0  # max 1% of bar amount
-LOT_SIZE = 100
+_COST_MODEL = load_cost_model()
+_TRADING_CONSTRAINTS = load_trading_constraints()
+DEFAULT_SLIPPAGE_BPS = _COST_MODEL.base_slippage_bps
+DEFAULT_CAPACITY_PCT = _TRADING_CONSTRAINTS.max_order_bar_amount_pct
+LOT_SIZE = _TRADING_CONSTRAINTS.lot_size
 
 
 @dataclass(frozen=True)
 class ExecutionConfig:
-    fee_bps: float = DEFAULT_FEE_BPS
+    # Legacy symmetric fee override. None uses the shared side-specific model.
+    fee_bps: float | None = None
     slippage_bps: float = DEFAULT_SLIPPAGE_BPS
     capacity_pct: float = DEFAULT_CAPACITY_PCT
     lot_size: int = LOT_SIZE
+    buy_commission_bps: float = _COST_MODEL.buy_commission_bps
+    sell_commission_bps: float = _COST_MODEL.sell_commission_bps
+    stamp_duty_bps: float = _COST_MODEL.stamp_duty_bps
+    minimum_commission_yuan: float = _COST_MODEL.minimum_commission_yuan
 
     def __post_init__(self) -> None:
-        if (
-            not math.isfinite(self.fee_bps)
-            or not math.isfinite(self.slippage_bps)
-            or self.fee_bps < 0
-            or self.slippage_bps < 0
+        fee_values = (
+            self.slippage_bps,
+            self.buy_commission_bps,
+            self.sell_commission_bps,
+            self.stamp_duty_bps,
+            self.minimum_commission_yuan,
+        )
+        if any(not math.isfinite(value) or value < 0 for value in fee_values):
+            raise ValueError("fees and slippage must be non-negative")
+        if self.fee_bps is not None and (
+            not math.isfinite(self.fee_bps) or self.fee_bps < 0
         ):
             raise ValueError("fees and slippage must be non-negative")
         if (
@@ -74,12 +89,17 @@ class TradeResult:
     entry_time: str = ""
     entry_price_raw: float = 0.0
     entry_price_with_cost: float = 0.0
+    entry_commission_yuan: float = 0.0
+    entry_slippage_yuan: float = 0.0
     shares: int = 0
     entry_reason: str = ""
     exit_signal_time: str = ""
     exit_time: str = ""
     exit_price_raw: float = 0.0
     exit_price_with_cost: float = 0.0
+    exit_commission_yuan: float = 0.0
+    exit_stamp_duty_yuan: float = 0.0
+    exit_slippage_yuan: float = 0.0
     exit_reason: str = ""
     gross_return: float = 0.0
     net_return: float = 0.0
@@ -103,12 +123,17 @@ class TradeResult:
             "entry_time": self.entry_time,
             "entry_price_raw": self.entry_price_raw,
             "entry_price_with_cost": self.entry_price_with_cost,
+            "entry_commission_yuan": self.entry_commission_yuan,
+            "entry_slippage_yuan": self.entry_slippage_yuan,
             "shares": self.shares,
             "entry_reason": self.entry_reason,
             "exit_signal_time": self.exit_signal_time,
             "exit_time": self.exit_time,
             "exit_price_raw": self.exit_price_raw,
             "exit_price_with_cost": self.exit_price_with_cost,
+            "exit_commission_yuan": self.exit_commission_yuan,
+            "exit_stamp_duty_yuan": self.exit_stamp_duty_yuan,
+            "exit_slippage_yuan": self.exit_slippage_yuan,
             "exit_reason": self.exit_reason,
             "gross_return": self.gross_return,
             "net_return": self.net_return,
@@ -157,18 +182,67 @@ def is_limit_down(price: float, down_limit: float, slack: float = 0.0005) -> boo
 # ---------------------------------------------------------------------------
 
 
-def compute_entry_cost(price: float, config: ExecutionConfig) -> float:
+def _commission_per_share(
+    price: float,
+    shares: int | None,
+    commission_bps: float,
+    minimum_commission_yuan: float,
+) -> float:
+    proportional = price * commission_bps / 10000.0
+    if shares is None or shares <= 0:
+        return proportional
+    total = max(
+        price * shares * commission_bps / 10000.0,
+        minimum_commission_yuan,
+    )
+    return total / shares
+
+
+def compute_entry_cost(
+    price: float,
+    config: ExecutionConfig,
+    shares: int | None = None,
+) -> float:
     """Compute effective entry price including fees and slippage."""
     slippage = price * (config.slippage_bps / 10000.0)
-    fee = price * (config.fee_bps / 10000.0)
+    commission_bps = (
+        config.fee_bps
+        if config.fee_bps is not None
+        else config.buy_commission_bps
+    )
+    fee = _commission_per_share(
+        price,
+        shares,
+        commission_bps,
+        0.0 if config.fee_bps is not None else config.minimum_commission_yuan,
+    )
     return price + slippage + fee
 
 
-def compute_exit_cost(price: float, config: ExecutionConfig) -> float:
+def compute_exit_cost(
+    price: float,
+    config: ExecutionConfig,
+    shares: int | None = None,
+) -> float:
     """Compute effective exit price after fees and slippage."""
     slippage = price * (config.slippage_bps / 10000.0)
-    fee = price * (config.fee_bps / 10000.0)
-    return price - slippage - fee
+    commission_bps = (
+        config.fee_bps
+        if config.fee_bps is not None
+        else config.sell_commission_bps
+    )
+    fee = _commission_per_share(
+        price,
+        shares,
+        commission_bps,
+        0.0 if config.fee_bps is not None else config.minimum_commission_yuan,
+    )
+    stamp = (
+        0.0
+        if config.fee_bps is not None
+        else price * config.stamp_duty_bps / 10000.0
+    )
+    return price - slippage - fee - stamp
 
 
 def round_lots(shares: float, lot_size: int = LOT_SIZE) -> int:
@@ -316,9 +390,14 @@ def simulate_trade(
         return result
 
     # Compute shares
-    entry_price_with_cost = compute_entry_cost(entry_open, config)
-    raw_shares = capital_per_trade / entry_price_with_cost
+    estimated_entry_price = compute_entry_cost(entry_open, config)
+    raw_shares = capital_per_trade / estimated_entry_price
     shares = round_lots(raw_shares, config.lot_size)
+    entry_price_with_cost = compute_entry_cost(entry_open, config, shares)
+    while shares > 0 and entry_price_with_cost * shares > capital_per_trade:
+        shares -= config.lot_size
+        if shares > 0:
+            entry_price_with_cost = compute_entry_cost(entry_open, config, shares)
     if shares <= 0:
         result.no_fill_reason = "no_fill_lot_size"
         return result
@@ -342,6 +421,22 @@ def simulate_trade(
     result.entry_time = entry_time
     result.entry_price_raw = entry_open
     result.entry_price_with_cost = entry_price_with_cost
+    result.entry_commission_yuan = max(
+        entry_open
+        * shares
+        * (
+            config.fee_bps
+            if config.fee_bps is not None
+            else config.buy_commission_bps
+        )
+        / 10000.0,
+        0.0
+        if config.fee_bps is not None
+        else config.minimum_commission_yuan,
+    )
+    result.entry_slippage_yuan = (
+        entry_open * shares * config.slippage_bps / 10000.0
+    )
     result.shares = shares
     if exit_bars.height == 0:
         result.no_fill_reason = "no_fill_no_exit_data"
@@ -497,7 +592,7 @@ def simulate_trade(
         result.pending_exit_bars = pending_bars
         return result
 
-    exit_price_with_cost = compute_exit_cost(exit_price_raw, config)
+    exit_price_with_cost = compute_exit_cost(exit_price_raw, config, result.shares)
     exit_adj = adj_factors_map.get(exit_date)
     if exit_adj is None or not math.isfinite(exit_adj) or exit_adj <= 0:
         result.no_fill_reason = "no_fill_missing_adj_factor"
@@ -522,6 +617,30 @@ def simulate_trade(
     result.exit_time = exit_time
     result.exit_price_raw = exit_price_raw
     result.exit_price_with_cost = exit_price_with_cost
+    result.exit_commission_yuan = max(
+        exit_price_raw
+        * result.shares
+        * (
+            config.fee_bps
+            if config.fee_bps is not None
+            else config.sell_commission_bps
+        )
+        / 10000.0,
+        0.0
+        if config.fee_bps is not None
+        else config.minimum_commission_yuan,
+    )
+    result.exit_stamp_duty_yuan = (
+        0.0
+        if config.fee_bps is not None
+        else exit_price_raw
+        * result.shares
+        * config.stamp_duty_bps
+        / 10000.0
+    )
+    result.exit_slippage_yuan = (
+        exit_price_raw * result.shares * config.slippage_bps / 10000.0
+    )
     result.exit_reason = exit_reason
     result.gross_return = gross_return
     result.net_return = net_return

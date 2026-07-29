@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 
@@ -105,6 +105,8 @@ def _prediction_bars(frame: pl.DataFrame) -> list[PredictionBar]:
         "next_close",
         "next_can_buy",
         "next_can_sell",
+        "amount",
+        "volatility_20",
     }
     missing = required - set(frame.columns)
     if missing:
@@ -118,11 +120,25 @@ def _prediction_bars(frame: pl.DataFrame) -> list[PredictionBar]:
             trade_date=_as_date(row["next_trade_date"]),
             symbol=str(row["symbol"]),
             score=float(row["prediction"]),
-            close=float(row["adj_close"]),
-            next_open=float(row["next_open"]),
-            next_close=float(row["next_close"]),
+            ranking_score=(
+                float(row["raw_score"])
+                if row.get("raw_score") is not None
+                else None
+            ),
+            close=float(row.get("close") or row["adj_close"]),
+            next_open=float(row.get("next_raw_open") or row["next_open"]),
+            next_close=float(row.get("next_raw_close") or row["next_close"]),
             can_buy=bool(row["next_can_buy"]),
             can_sell=bool(row["next_can_sell"]),
+            liquidity_amount_yuan=(
+                float(row["amount"]) if row["amount"] is not None else None
+            ),
+            volatility_20=(
+                float(row["volatility_20"])
+                if row["volatility_20"] is not None
+                else None
+            ),
+            theme=str(row["theme"]) if row.get("theme") is not None else None,
         )
         for row in complete.iter_rows(named=True)
     ]
@@ -142,22 +158,17 @@ def evaluate_oos_predictions(
     config = config or PortfolioConfig()
     bars = _prediction_bars(frame)
     portfolio = simulate_portfolio(bars, config)
-    double_cost = simulate_portfolio(
-        bars,
-        PortfolioConfig(
-            start_cash=config.start_cash,
-            max_positions=config.max_positions,
-            fee_bps=config.fee_bps * 2,  # stress test: double the per-side cost
-            min_expected_return=config.min_expected_return,
-            switch_buffer=config.switch_buffer,
-            rebalance_threshold_pct=config.rebalance_threshold_pct,
-        ),
+    double_cost_config = (
+        replace(config, fee_bps=config.fee_bps * 2)
+        if config.fee_bps is not None
+        else replace(config, cost_multiplier=config.cost_multiplier * 2)
     )
+    double_cost = simulate_portfolio(bars, double_cost_config)
     cutoff = str(frame["date"].max())
     folds = int(frame["fold"].n_unique()) if "fold" in frame.columns else 0
     return EvaluationReport(
         schema_version=2,
-        evaluation_engine="ashare-next-open-v2",
+        evaluation_engine="ashare-next-open-v3",
         data_cutoff=cutoff,
         source_sha256=file_sha256(prediction_path),
         universe_scope=("production-ai-point-in-time" if universe_path else "full-a-share"),

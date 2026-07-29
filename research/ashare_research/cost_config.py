@@ -19,6 +19,10 @@ class CostModel:
     base_slippage_bps: float
     minimum_commission_yuan: float
     impact_model: str
+    impact_coefficient: float
+    impact_volatility_lookback: int
+    max_impact_bps: float
+    missing_turnover_penalty_bps: float
 
     @property
     def buy_total_bps(self) -> float:
@@ -54,4 +58,12 @@ def load_cost_model() -> CostModel:
         base_slippage_bps=float(raw["base_slippage_bps"]),
         minimum_commission_yuan=float(raw.get("minimum_commission_yuan", 5.0)),
         impact_model=str(raw.get("impact_model", "sqrt-volume")),
+        impact_coefficient=float(raw.get("impact_coefficient", 0.0)),
+        impact_volatility_lookback=int(
+            raw.get("impact_volatility_lookback", 20)
+        ),
+        max_impact_bps=float(raw.get("max_impact_bps", 0.0)),
+        missing_turnover_penalty_bps=float(
+            raw.get("missing_turnover_penalty_bps", 0.0)
+        ),
     )

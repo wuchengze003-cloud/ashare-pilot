@@ -75,9 +75,9 @@ test("equity is monotonically tracking the chosen asset (no losses on uptrend)",
   const start = r.equityCurve[0].equity;
   const end = r.equityCurve.at(-1)!.equity;
   assert.ok(end > start, `expected end (${end}) > start (${start}) when buying uptrend`);
-  // Total return should be positive and substantial — A goes 100→150 = +50%, we
-  // capture most of it after the first rebalance lag.
-  assert.ok(r.stats.totalReturnPct > 20, `got ${r.stats.totalReturnPct}%`);
+  // The shared production contract caps one stock at 25%, so the portfolio
+  // captures roughly one quarter of A's move while the rest remains cash.
+  assert.ok(r.stats.totalReturnPct > 8, `got ${r.stats.totalReturnPct}%`);
 });
 
 test("progress callback fires for signals + simulating phases", async () => {
@@ -213,8 +213,43 @@ test("archived decision signals override recomputed scorer output and keep targe
   assert.deepEqual(firstDayBuys.map((t) => t.symbol).sort(), ["A", "B"]);
   assert.equal(firstDayBuys.find((t) => t.symbol === "A")?.reason, "archived A");
   assert.equal(firstDayBuys.find((t) => t.symbol === "B")?.reason, "archived B");
-  assert.equal(firstDayBuys.find((t) => t.symbol === "A")?.targetWeightAfter, 0.75);
-  assert.equal(firstDayBuys.find((t) => t.symbol === "B")?.targetWeightAfter, 0.25);
+  assert.equal(firstDayBuys.find((t) => t.symbol === "A")?.targetWeightAfter, 0.25);
+  assert.ok(
+    Math.abs((firstDayBuys.find((t) => t.symbol === "B")?.targetWeightAfter ?? 0) - 0.15) < 1e-12,
+  );
+});
+
+test("production risk caps constrain single-stock and single-theme exposure", async () => {
+  const localSeries: SymbolSeries[] = ["A", "B", "C", "D"].map((symbol, index) => ({
+    entry: {
+      symbol,
+      name: symbol,
+      theme: index < 3 ? "SameTheme" : "OtherTheme",
+    },
+    klines: makeKlines("2025-01-01", Array.from({ length: N }, () => 100)),
+  }));
+  const equalWeight: Scorer = async (snapshots) =>
+    snapshots.map((snapshot) => ({
+      symbol: snapshot.symbol,
+      action: "buy",
+      confidence: 1,
+      size: 0.25,
+      rationale: "risk-cap-test",
+    }));
+  const result = await runBacktest(
+    localSeries,
+    { ...cfg, decisionEveryNDays: 1, rebalanceEveryNDays: 1, maxPositions: 4 },
+    { scorer: equalWeight },
+  );
+  const firstBuys = result.trades.filter(
+    (trade) => trade.decisionDate === dates[0] && trade.side === "buy",
+  );
+  const bySymbol = new Map(firstBuys.map((trade) => [trade.symbol, trade.targetWeightAfter]));
+
+  assert.equal(bySymbol.get("A"), 0.25);
+  assert.ok(Math.abs((bySymbol.get("B") ?? 0) - 0.15) < 1e-12);
+  assert.equal(bySymbol.has("C"), false);
+  assert.equal(bySymbol.get("D"), 0.25);
 });
 
 // Prepend 5 flat bars before the window so the first rebalance date has
@@ -531,4 +566,105 @@ test("costConfig: stamp duty only on sell side", async () => {
   const symFinal = rSym.equityCurve.at(-1)!.equity;
   const costFinal = rCost.equityCurve.at(-1)!.equity;
   assert.ok(costFinal >= symFinal, `costConfig (${costFinal}) should be >= symmetric (${symFinal}) due to lower total fees (16bp vs 20bp)`);
+});
+
+test("costConfig applies the five-yuan minimum commission per order", async () => {
+  const series: SymbolSeries[] = [
+    {
+      entry: { symbol: "600000", name: "MinimumFee", theme: "T" },
+      klines: makeKlines("2025-05-01", Array.from({ length: 40 }, () => 10)),
+    },
+  ];
+  const tinyAllocation: Scorer = async (snapshots) =>
+    snapshots.map((snapshot) => ({
+      symbol: snapshot.symbol,
+      action: "buy",
+      confidence: 1,
+      size: 0.001,
+      rationale: "minimum-fee",
+    }));
+  const result = await runBacktest(
+    series,
+    {
+      ...cfg,
+      startDate: "2025-05-01",
+      endDate: "2025-06-30",
+      decisionEveryNDays: 1,
+      rebalanceEveryNDays: 1,
+      maxPositions: 1,
+      feeBps: 0,
+      costConfig: {
+        buyCommissionBps: 2.5,
+        sellCommissionBps: 2.5,
+        stampDutyBps: 5,
+        slippageBps: 3,
+        minimumCommissionYuan: 5,
+      },
+    },
+    { scorer: tinyAllocation },
+  );
+  const firstBuy = result.trades.find((trade) => trade.side === "buy");
+
+  assert.ok(firstBuy);
+  assert.equal(firstBuy.commissionYuan, 5);
+  assert.equal(firstBuy.stampDutyYuan, 0);
+  assert.ok((firstBuy.netCashFlowYuan ?? 0) < -(firstBuy.grossNotionalYuan ?? 0));
+});
+
+test("impact slippage never reads execution-day turnover", async () => {
+  const closes = Array.from({ length: 40 }, (_, index) => 10 + (index % 3) * 0.1);
+  const baseRows = makeKlines("2025-05-01", closes).map((row) => ({
+    ...row,
+    amount: 50_000_000,
+  }));
+  const changedRows = baseRows.map((row, index) => (
+    index === 5 ? { ...row, amount: 1 } : row
+  ));
+  const buyOnce: Scorer = async (snapshots, { asOf }) =>
+    snapshots.map((snapshot) => ({
+      symbol: snapshot.symbol,
+      action: asOf === baseRows[4].date ? "buy" : "hold",
+      confidence: 1,
+      size: asOf === baseRows[4].date ? 0.25 : 0,
+      rationale: "point-in-time-impact",
+    }));
+  const impactConfig = {
+    buyCommissionBps: 2.5,
+    sellCommissionBps: 2.5,
+    stampDutyBps: 5,
+    slippageBps: 3,
+    minimumCommissionYuan: 5,
+    impactModel: "square-root-participation",
+    impactCoefficient: 0.5,
+    impactVolatilityLookback: 20,
+    maxImpactBps: 50,
+    missingTurnoverPenaltyBps: 5,
+  };
+  const localCfg = {
+    ...cfg,
+    startDate: baseRows[0].date,
+    endDate: baseRows.at(-1)!.date,
+    decisionEveryNDays: 1,
+    rebalanceEveryNDays: 1,
+    maxPositions: 1,
+    feeBps: 0,
+    costConfig: impactConfig,
+  };
+  const [normal, changed] = await Promise.all([
+    runBacktest(
+      [{ entry: { symbol: "600000", name: "Impact", theme: "T" }, klines: baseRows }],
+      localCfg,
+      { scorer: buyOnce },
+    ),
+    runBacktest(
+      [{ entry: { symbol: "600000", name: "Impact", theme: "T" }, klines: changedRows }],
+      localCfg,
+      { scorer: buyOnce },
+    ),
+  ]);
+
+  assert.equal(
+    normal.trades.find((trade) => trade.side === "buy")?.slippageYuan,
+    changed.trades.find((trade) => trade.side === "buy")?.slippageYuan,
+  );
 });
