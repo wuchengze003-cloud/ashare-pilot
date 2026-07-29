@@ -50,6 +50,46 @@ def test_other_features_keep_25_percent_limit_and_nan_counts_as_missing():
     assert result.missing_feature_limits["momentum"] == 0.25
 
 
+def test_moneyflow_quality_accepts_non_degenerate_values():
+    panel = pl.DataFrame(
+        {
+            "date": [1, 2, 3],
+            "symbol": ["A", "B", "C"],
+            "net_moneyflow_ratio": [0.1, None, -0.2],
+            "large_order_ratio": [0.2, 0.1, -0.1],
+        }
+    )
+
+    result = validate_feature_panel(
+        panel,
+        ["net_moneyflow_ratio", "large_order_ratio"],
+        max_missing_rate=0.5,
+    )
+
+    assert result.passed
+    assert result.moneyflow_status == "available"
+
+
+def test_moneyflow_quality_rejects_zero_variance_feed():
+    panel = pl.DataFrame(
+        {
+            "date": [1, 2, 3],
+            "symbol": ["A", "B", "C"],
+            "net_moneyflow_ratio": [0.1, 0.1, 0.1],
+            "large_order_ratio": [0.2, 0.2, 0.2],
+        }
+    )
+
+    result = validate_feature_panel(
+        panel,
+        ["net_moneyflow_ratio", "large_order_ratio"],
+    )
+
+    assert not result.passed
+    assert result.moneyflow_status == "degenerate"
+    assert any("near-zero" in failure for failure in result.failures)
+
+
 def test_evidently_drift_report_uses_current_metric_schema(tmp_path):
     reference = pl.DataFrame(
         {

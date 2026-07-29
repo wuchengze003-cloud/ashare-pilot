@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,11 @@ DAILY_ENDPOINTS = (
     ("limit_list_d", False),
     ("suspend_d", True),
 )
+CSI800_COMPONENTS = {
+    "000300.SH": 300,
+    "000905.SH": 500,
+}
+MAX_INDEX_SNAPSHOT_AGE_DAYS = 45
 
 
 @dataclass(frozen=True)
@@ -97,7 +104,14 @@ def inspect_dataset_coverage(root: Path | str) -> DatasetCoverage:
             (root / "reference" / f"{name}.parquet").is_file()
             and (root / "reference" / f"{name}.parquet").stat().st_size > 0
         )
-        for name in ("stock_basic", "namechange", "trade_cal")
+        for name in (
+            "stock_basic",
+            "namechange",
+            "trade_cal",
+            "sw_industry_membership",
+            "csi800_index_weight",
+            "csi800_membership",
+        )
     }
     failures: list[str] = []
     if not daily_dates:
@@ -110,6 +124,9 @@ def inspect_dataset_coverage(root: Path | str) -> DatasetCoverage:
     for name, present in references.items():
         if not present:
             failures.append(f"reference table is missing: {name}")
+    csi800_intervals = root / "reference" / "csi800.txt"
+    if not csi800_intervals.is_file() or csi800_intervals.stat().st_size == 0:
+        failures.append("reference table is missing: csi800.txt")
     trade_cal_path = root / "reference" / "trade_cal.parquet"
     if trade_cal_path.is_file():
         try:
@@ -246,6 +263,22 @@ def _atomic_parquet(frame: pl.DataFrame, target: Path) -> None:
             os.unlink(temporary)
 
 
+def _atomic_text(value: str, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        prefix=target.name,
+        suffix=".tmp",
+        dir=target.parent,
+    )
+    os.close(fd)
+    try:
+        Path(temporary).write_text(value, "utf-8")
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def _normalize_frame(frame: pl.DataFrame) -> pl.DataFrame:
     """Normalize dtypes so partitions written at different times stay scan-compatible.
 
@@ -266,11 +299,316 @@ def _normalize_frame(frame: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def _query_with_retry(pro, endpoint: str, attempts: int = 3, **kwargs):
+def _month_starts(start_date: date, end_date: date) -> tuple[date, ...]:
+    if end_date < start_date:
+        return ()
+    current = start_date.replace(day=1)
+    result: list[date] = []
+    while current <= end_date:
+        result.append(current)
+        current = (
+            date(current.year + 1, 1, 1)
+            if current.month == 12
+            else date(current.year, current.month + 1, 1)
+        )
+    return tuple(result)
+
+
+def _ts_code_to_instrument(value: str) -> str:
+    code, exchange = value.split(".", maxsplit=1)
+    if len(code) != 6 or exchange not in {"SH", "SZ", "BJ"}:
+        raise ValueError(f"invalid constituent code: {value!r}")
+    return f"{exchange}{code}"
+
+
+def _validated_index_snapshots(frame: pl.DataFrame) -> pl.DataFrame:
+    required = {"index_code", "trade_date", "con_code", "weight"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise RuntimeError(
+            f"index_weight missing required columns: {sorted(missing)}"
+        )
+    normalized = (
+        frame.select(sorted(required))
+        .with_columns(
+            pl.col("index_code").cast(pl.String),
+            pl.col("trade_date").cast(pl.String),
+            pl.col("con_code").cast(pl.String),
+            pl.col("weight").cast(pl.Float64, strict=False),
+        )
+        .drop_nulls(["index_code", "trade_date", "con_code", "weight"])
+        .unique(
+            subset=["index_code", "trade_date", "con_code"],
+            keep="last",
+        )
+        .sort("index_code", "trade_date", "con_code")
+    )
+    if normalized.is_empty():
+        raise RuntimeError("index_weight history is empty")
+    unknown = set(normalized["index_code"].unique()) - set(CSI800_COMPONENTS)
+    if unknown:
+        raise RuntimeError(f"unexpected index_weight sources: {sorted(unknown)}")
+    invalid_dates = normalized.filter(
+        ~pl.col("trade_date").str.contains(r"^\d{8}$")
+    )
+    if not invalid_dates.is_empty():
+        raise RuntimeError("index_weight contains invalid trade_date")
+    grouped = normalized.group_by("index_code", "trade_date").agg(
+        pl.col("con_code").n_unique().alias("constituents"),
+        pl.col("weight").sum().alias("weight_sum"),
+    )
+    for row in grouped.iter_rows(named=True):
+        expected = CSI800_COMPONENTS[row["index_code"]]
+        if row["constituents"] != expected:
+            raise RuntimeError(
+                "index_weight snapshot has wrong constituent count: "
+                f"{row['index_code']} {row['trade_date']} "
+                f"{row['constituents']} != {expected}"
+            )
+        if not 99.0 <= row["weight_sum"] <= 101.0:
+            raise RuntimeError(
+                "index_weight snapshot has invalid total weight: "
+                f"{row['index_code']} {row['trade_date']} "
+                f"{row['weight_sum']:.4f}"
+            )
+    return normalized
+
+
+def _build_csi800_membership(
+    snapshots: pl.DataFrame,
+    start_date: date,
+    end_date: date,
+) -> pl.DataFrame:
+    if end_date < start_date:
+        raise ValueError("membership end date precedes start date")
+    source_snapshots: dict[str, dict[date, set[str]]] = {}
+    for index_code, expected in CSI800_COMPONENTS.items():
+        source = snapshots.filter(pl.col("index_code") == index_code)
+        by_date: dict[date, set[str]] = {}
+        for trade_date, group in source.partition_by(
+            "trade_date",
+            as_dict=True,
+        ).items():
+            raw_date = trade_date[0] if isinstance(trade_date, tuple) else trade_date
+            snapshot_date = date.fromisoformat(
+                f"{str(raw_date)[:4]}-{str(raw_date)[4:6]}-{str(raw_date)[6:]}"
+            )
+            members = {
+                _ts_code_to_instrument(value)
+                for value in group["con_code"].to_list()
+            }
+            if len(members) != expected:
+                raise RuntimeError(
+                    f"{index_code} {snapshot_date} membership is incomplete"
+                )
+            by_date[snapshot_date] = members
+        eligible_starts = [value for value in by_date if value <= start_date]
+        if not eligible_starts:
+            raise RuntimeError(
+                f"{index_code} has no snapshot at or before {start_date}"
+            )
+        ordered = sorted(value for value in by_date if value <= end_date)
+        if (start_date - max(eligible_starts)).days > MAX_INDEX_SNAPSHOT_AGE_DAYS:
+            raise RuntimeError(
+                f"{index_code} membership is stale at start date {start_date}"
+            )
+        if not ordered or (end_date - ordered[-1]).days > MAX_INDEX_SNAPSHOT_AGE_DAYS:
+            raise RuntimeError(
+                f"{index_code} membership is stale at end date {end_date}"
+            )
+        for left, right in zip(ordered, ordered[1:], strict=False):
+            if (right - left).days > MAX_INDEX_SNAPSHOT_AGE_DAYS:
+                raise RuntimeError(
+                    f"{index_code} membership has a snapshot gap: {left} -> {right}"
+                )
+        source_snapshots[index_code] = by_date
+
+    event_dates = {
+        start_date,
+        *(
+            value
+            for by_date in source_snapshots.values()
+            for value in by_date
+            if start_date < value <= end_date
+        ),
+    }
+    timeline: list[tuple[date, set[str]]] = []
+    for event_date in sorted(event_dates):
+        component_sets: list[set[str]] = []
+        for index_code in CSI800_COMPONENTS:
+            by_date = source_snapshots[index_code]
+            snapshot_date = max(value for value in by_date if value <= event_date)
+            component_sets.append(by_date[snapshot_date])
+        overlap = component_sets[0] & component_sets[1]
+        members = component_sets[0] | component_sets[1]
+        if overlap or len(members) != 800:
+            raise RuntimeError(
+                "CSI800 union is invalid at "
+                f"{event_date}: overlap={len(overlap)} union={len(members)}"
+            )
+        if not timeline or timeline[-1][1] != members:
+            timeline.append((event_date, members))
+
+    active_starts: dict[str, date] = {}
+    intervals: list[dict[str, Any]] = []
+    for event_date, members in timeline:
+        previous = set(active_starts)
+        for instrument in sorted(previous - members):
+            intervals.append(
+                {
+                    "instrument": instrument,
+                    "member_start": active_starts.pop(instrument),
+                    "member_end": event_date - timedelta(days=1),
+                }
+            )
+        for instrument in sorted(members - previous):
+            active_starts[instrument] = event_date
+    intervals.extend(
+        {
+            "instrument": instrument,
+            "member_start": member_start,
+            "member_end": end_date,
+        }
+        for instrument, member_start in sorted(active_starts.items())
+    )
+    result = pl.DataFrame(
+        intervals,
+        schema={
+            "instrument": pl.String,
+            "member_start": pl.Date,
+            "member_end": pl.Date,
+        },
+    ).sort("instrument", "member_start")
+    if result.is_empty():
+        raise RuntimeError("CSI800 membership intervals are empty")
+    return result
+
+
+def _write_csi800_membership(
+    pro,
+    reference: Path,
+    start_date: date,
+    end_date: date,
+    refresh: bool,
+    rate_limiter: _RequestRateLimiter,
+) -> None:
+    snapshots_target = reference / "csi800_index_weight.parquet"
+    existing = (
+        pl.read_parquet(snapshots_target)
+        if snapshots_target.exists() and snapshots_target.stat().st_size > 0
+        else None
+    )
+    query_start = start_date - timedelta(days=45)
+    if existing is not None and not refresh:
+        latest = max(
+            date.fromisoformat(
+                f"{value[:4]}-{value[4:6]}-{value[6:]}"
+            )
+            for value in existing["trade_date"].cast(pl.String).to_list()
+        )
+        query_start = max(query_start, latest - timedelta(days=45))
+
+    fetched: list[pl.DataFrame] = []
+    for month_start in _month_starts(query_start, end_date):
+        next_month = (
+            date(month_start.year + 1, 1, 1)
+            if month_start.month == 12
+            else date(month_start.year, month_start.month + 1, 1)
+        )
+        month_end = min(end_date, next_month - timedelta(days=1))
+        for index_code in CSI800_COMPONENTS:
+            frame = _query_with_retry(
+                pro,
+                "index_weight",
+                index_code=index_code,
+                start_date=month_start.strftime("%Y%m%d"),
+                end_date=month_end.strftime("%Y%m%d"),
+                rate_limiter=rate_limiter,
+            )
+            if frame is None or frame.empty:
+                continue
+            fetched.append(
+                pl.from_pandas(frame).with_columns(
+                    pl.lit(index_code).alias("index_code")
+                )
+            )
+    if not fetched and existing is None:
+        raise RuntimeError("index_weight returned no CSI300 or CSI500 snapshots")
+    combined = pl.concat(
+        ([existing] if existing is not None else []) + fetched,
+        how="diagonal_relaxed",
+    )
+    snapshots = _validated_index_snapshots(combined)
+    membership = _build_csi800_membership(
+        snapshots,
+        start_date,
+        end_date,
+    )
+    _atomic_parquet(snapshots, snapshots_target)
+    _atomic_parquet(membership, reference / "csi800_membership.parquet")
+    interval_lines = "\n".join(
+        f"{row['instrument']}\t{row['member_start']}\t{row['member_end']}"
+        for row in membership.iter_rows(named=True)
+    )
+    _atomic_text(interval_lines + "\n", reference / "csi800.txt")
+    manifest = {
+        "schema_version": 1,
+        "source": "tushare-index-weight-csi300-plus-csi500",
+        "source_indices": CSI800_COMPONENTS,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "snapshot_rows": snapshots.height,
+        "snapshot_dates": snapshots["trade_date"].n_unique(),
+        "membership_intervals": membership.height,
+        "active_members_at_end": membership.filter(
+            pl.col("member_end") == end_date
+        )["instrument"].n_unique(),
+    }
+    _atomic_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        reference / "csi800.manifest.json",
+    )
+
+
+class _RequestRateLimiter:
+    """Thread-safe minimum interval between provider request starts."""
+
+    def __init__(self, interval_seconds: float) -> None:
+        if interval_seconds < 0:
+            raise ValueError("request interval must be non-negative")
+        self._interval = interval_seconds
+        self._lock = threading.Lock()
+        self._next_request = 0.0
+
+    def wait(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            delay = max(0.0, self._next_request - now)
+            self._next_request = max(now, self._next_request) + self._interval
+        if delay > 0:
+            time.sleep(delay)
+
+
+def _query_with_retry(
+    pro,
+    endpoint: str,
+    attempts: int = 5,
+    rate_limiter: _RequestRateLimiter | None = None,
+    require_nonempty: bool = False,
+    **kwargs,
+):
     last_error: Exception | None = None
     for attempt in range(attempts):
         try:
-            return pro.query(endpoint, **kwargs)
+            if rate_limiter is not None:
+                rate_limiter.wait()
+            frame = pro.query(endpoint, **kwargs)
+            if require_nonempty and (
+                frame is None or getattr(frame, "empty", True)
+            ):
+                raise RuntimeError("provider returned an empty response")
+            return frame
         except Exception as error:
             last_error = error
             if attempt + 1 < attempts:
@@ -278,7 +616,182 @@ def _query_with_retry(pro, endpoint: str, attempts: int = 3, **kwargs):
     raise RuntimeError(f"{endpoint} failed after {attempts} attempts: {last_error}")
 
 
-def _write_reference_tables(pro, root: Path, refresh: bool) -> None:
+def _write_sw_industry_membership(
+    pro,
+    reference: Path,
+    refresh: bool,
+    rate_limiter: _RequestRateLimiter,
+) -> None:
+    target = reference / "sw_industry_membership.parquet"
+    if target.exists() and not refresh:
+        return
+    classification_frames = []
+    for source in ("SW2014", "SW2021"):
+        for level in ("L1", "L2", "L3"):
+            frame = _query_with_retry(
+                pro,
+                "index_classify",
+                level=level,
+                src=source,
+                rate_limiter=rate_limiter,
+                require_nonempty=True,
+            )
+            if frame is not None and not frame.empty:
+                classification_frames.append(frame)
+    if not classification_frames:
+        raise RuntimeError("index_classify returned no SW classifications")
+
+    frames = []
+    for status in ("Y", "N"):
+        frame = _query_with_retry(
+            pro,
+            "index_member_all",
+            is_new=status,
+            rate_limiter=rate_limiter,
+        )
+        if frame is not None and not frame.empty:
+            frames.append(frame)
+    if not frames:
+        raise RuntimeError("index_member_all returned no historical memberships")
+
+    import pandas as pd
+
+    def clean_cell(value: Any) -> str:
+        if value is None or pd.isna(value):
+            return ""
+        return str(value).strip()
+
+    classifications = pd.concat(classification_frames, ignore_index=True)
+    required_classifications = {
+        "index_code",
+        "industry_name",
+        "level",
+        "industry_code",
+        "parent_code",
+    }
+    missing_classifications = required_classifications - set(
+        classifications.columns
+    )
+    if missing_classifications:
+        raise RuntimeError(
+            "index_classify missing required columns: "
+            f"{sorted(missing_classifications)}"
+        )
+    classifications = classifications.dropna(subset=["industry_code"])
+    index_to_industry = {
+        clean_cell(row.index_code): clean_cell(row.industry_code)
+        for row in classifications.itertuples()
+        if clean_cell(row.index_code) and clean_cell(row.industry_code)
+    }
+    parent_by_industry = {
+        clean_cell(row.industry_code): clean_cell(row.parent_code)
+        for row in classifications.itertuples()
+        if clean_cell(row.industry_code) and clean_cell(row.parent_code)
+    }
+    l1_by_industry = {
+        clean_cell(row.industry_code): (
+            clean_cell(row.index_code),
+            clean_cell(row.industry_name),
+        )
+        for row in classifications[classifications["level"] == "L1"].itertuples()
+        if clean_cell(row.industry_code)
+        and clean_cell(row.index_code)
+        and clean_cell(row.industry_name)
+    }
+
+    raw_membership = pd.concat(frames, ignore_index=True)
+    if len(raw_membership) == 2_000:
+        raise RuntimeError(
+            "index_member_all may be truncated at the documented row limit"
+    )
+    mapped_rows = []
+    for row in raw_membership.to_dict("records"):
+        l1_code = clean_cell(row.get("l1_code"))
+        l1_name = clean_cell(row.get("l1_name"))
+        if not l1_code or not l1_name:
+            l2_value = clean_cell(row.get("l2_code"))
+            l2_industry = index_to_industry.get(l2_value, l2_value)
+            l1_industry = parent_by_industry.get(l2_industry)
+            if l1_industry in l1_by_industry:
+                l1_code, l1_name = l1_by_industry[l1_industry]
+        if not l1_code or not l1_name:
+            l3_value = clean_cell(row.get("l3_code"))
+            l3_industry = index_to_industry.get(l3_value, l3_value)
+            l2_industry = parent_by_industry.get(l3_industry)
+            l1_industry = parent_by_industry.get(
+                clean_cell(l2_industry)
+            )
+            if l1_industry in l1_by_industry:
+                l1_code, l1_name = l1_by_industry[l1_industry]
+        mapped_rows.append(
+            {
+                "ts_code": clean_cell(row.get("ts_code")) or None,
+                "l1_code": l1_code or None,
+                "l1_name": l1_name or None,
+                "in_date": clean_cell(row.get("in_date")) or None,
+                "out_date": clean_cell(row.get("out_date")) or None,
+                "is_new": clean_cell(row.get("is_new")) or None,
+            }
+        )
+    membership = pl.from_dicts(mapped_rows)
+    required = {"ts_code", "l1_code", "l1_name", "in_date", "out_date"}
+    missing = required - set(membership.columns)
+    if missing:
+        raise RuntimeError(
+            f"index_member_all missing required columns: {sorted(missing)}"
+        )
+    membership = (
+        membership.with_columns(
+            pl.col("ts_code").cast(pl.String),
+            pl.col("l1_code").cast(pl.String),
+            pl.col("l1_name").cast(pl.String),
+            pl.col("in_date").cast(pl.String),
+            pl.col("out_date").cast(pl.String),
+        )
+        .drop_nulls(["ts_code", "l1_code", "in_date"])
+        .filter(
+            (pl.col("l1_code").str.len_chars() > 0)
+            & (pl.col("l1_name").str.len_chars() > 0)
+        )
+        .unique(
+            subset=["ts_code", "l1_code", "in_date", "out_date"],
+            keep="last",
+        )
+        .sort("ts_code", "in_date")
+    )
+    if membership.is_empty():
+        raise RuntimeError("SW membership is empty after validation")
+    _atomic_parquet(membership, target)
+    _atomic_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "tushare-index-member-all",
+                "generated_at": datetime.now(UTC).isoformat(),
+                "rows": membership.height,
+                "symbols": membership["ts_code"].n_unique(),
+                "historical_rows": membership.filter(
+                    pl.col("is_new") == "N"
+                ).height
+                if "is_new" in membership.columns
+                else 0,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        reference / "sw_industry_membership.manifest.json",
+    )
+
+
+def _write_reference_tables(
+    pro,
+    root: Path,
+    start_date: date,
+    end_date: date,
+    refresh: bool,
+    rate_limiter: _RequestRateLimiter,
+) -> None:
     reference = root / "reference"
     endpoints = ("stock_basic", "namechange")
     for endpoint in endpoints:
@@ -293,16 +806,38 @@ def _write_reference_tables(pro, root: Path, refresh: bool) -> None:
                     exchange="",
                     list_status=status,
                     fields="ts_code,symbol,name,area,industry,market,list_date,delist_date,list_status",
+                    rate_limiter=rate_limiter,
                 )
                 for status in ("L", "D", "P")
             ]
         else:
-            frames = [_query_with_retry(pro, "namechange", ts_code="")]
+            frames = [
+                _query_with_retry(
+                    pro,
+                    "namechange",
+                    ts_code="",
+                    rate_limiter=rate_limiter,
+                )
+            ]
         nonempty = [frame for frame in frames if frame is not None and not frame.empty]
         if nonempty:
             import pandas as pd
 
             _atomic_parquet(pl.from_pandas(pd.concat(nonempty, ignore_index=True)), target)
+    _write_sw_industry_membership(
+        pro,
+        reference,
+        refresh,
+        rate_limiter,
+    )
+    _write_csi800_membership(
+        pro,
+        reference,
+        start_date,
+        end_date,
+        refresh,
+        rate_limiter,
+    )
 
 
 def _write_trade_calendar(calendar: Any, root: Path) -> None:
@@ -335,6 +870,49 @@ def _write_trade_calendar(calendar: Any, root: Path) -> None:
     _atomic_parquet(calendar_frame, target)
 
 
+def sync_csi800_membership(
+    root: Path | str,
+    start_date: date,
+    end_date: date,
+    env_file: Path | None = None,
+    refresh: bool = False,
+    request_interval_seconds: float = 0.12,
+) -> dict[str, Any]:
+    root = Path(root)
+    pro = build_tushare_client(env_file)
+    limiter = _RequestRateLimiter(request_interval_seconds)
+    _write_csi800_membership(
+        pro,
+        root / "reference",
+        start_date,
+        end_date,
+        refresh,
+        limiter,
+    )
+    manifest_path = root / "reference" / "csi800.manifest.json"
+    return json.loads(manifest_path.read_text("utf-8"))
+
+
+def sync_sw_industry_membership(
+    root: Path | str,
+    env_file: Path | None = None,
+    request_interval_seconds: float = 0.12,
+) -> dict[str, Any]:
+    root = Path(root)
+    pro = build_tushare_client(env_file)
+    limiter = _RequestRateLimiter(request_interval_seconds)
+    _write_sw_industry_membership(
+        pro,
+        root / "reference",
+        True,
+        limiter,
+    )
+    manifest_path = (
+        root / "reference" / "sw_industry_membership.manifest.json"
+    )
+    return json.loads(manifest_path.read_text("utf-8"))
+
+
 def sync_tushare(
     root: Path | str,
     start_date: date,
@@ -342,11 +920,22 @@ def sync_tushare(
     env_file: Path | None = None,
     refresh: bool = False,
     request_interval_seconds: float = 0.12,
+    max_workers: int = 8,
 ) -> SyncReport:
+    if max_workers <= 0:
+        raise ValueError("max_workers must be positive")
     root = Path(root)
     pro = build_tushare_client(env_file)
     started = datetime.now(UTC)
-    _write_reference_tables(pro, root, refresh)
+    limiter = _RequestRateLimiter(request_interval_seconds)
+    _write_reference_tables(
+        pro,
+        root,
+        start_date,
+        end_date,
+        refresh,
+        limiter,
+    )
     calendar = _query_with_retry(
         pro,
         "trade_cal",
@@ -355,6 +944,8 @@ def sync_tushare(
         end_date=end_date.strftime("%Y%m%d"),
         is_open="1",
         fields="cal_date,is_open",
+        rate_limiter=limiter,
+        require_nonempty=True,
     )
     _write_trade_calendar(calendar, root)
     trade_dates = sorted(str(value) for value in calendar["cal_date"].tolist())
@@ -362,41 +953,77 @@ def sync_tushare(
     written = 0
     skipped = 0
 
+    tasks: list[tuple[str, str, bool, Path]] = []
     for trade_date in trade_dates:
         for endpoint, required in DAILY_ENDPOINTS:
-            target = root / "raw" / endpoint / f"trade_date={trade_date}" / "part.parquet"
+            target = (
+                root
+                / "raw"
+                / endpoint
+                / f"trade_date={trade_date}"
+                / "part.parquet"
+            )
             if target.exists() and not refresh:
                 skipped += 1
-                continue
+            else:
+                tasks.append((trade_date, endpoint, required, target))
+
+    worker_state = threading.local()
+
+    def worker_client():
+        client = getattr(worker_state, "client", None)
+        if client is None:
+            client = build_tushare_client(env_file)
+            worker_state.client = client
+        return client
+
+    def fetch_partition(
+        task: tuple[str, str, bool, Path],
+    ) -> tuple[str, str, bool]:
+        trade_date, endpoint, required, target = task
+        frame = _query_with_retry(
+            worker_client(),
+            endpoint,
+            trade_date=trade_date,
+            rate_limiter=limiter,
+            require_nonempty=required and endpoint != "suspend_d",
+        )
+        if frame is None:
+            if required:
+                raise RuntimeError("required endpoint returned no rows")
+            return endpoint, trade_date, False
+        if frame.empty:
+            if endpoint == "suspend_d":
+                _atomic_parquet(
+                    pl.DataFrame(
+                        schema={
+                            "ts_code": pl.String,
+                            "trade_date": pl.String,
+                        }
+                    ),
+                    target,
+                )
+                return endpoint, trade_date, True
+            if required:
+                raise RuntimeError("required endpoint returned no rows")
+            return endpoint, trade_date, False
+        _atomic_parquet(_normalize_frame(pl.from_pandas(frame)), target)
+        return endpoint, trade_date, True
+
+    with ThreadPoolExecutor(
+        max_workers=min(max_workers, max(1, len(tasks))),
+        thread_name_prefix="tushare-sync",
+    ) as executor:
+        future_tasks = {
+            executor.submit(fetch_partition, task): task for task in tasks
+        }
+        for future in as_completed(future_tasks):
+            trade_date, endpoint, _, _ = future_tasks[future]
             try:
-                frame = _query_with_retry(pro, endpoint, trade_date=trade_date)
-                if frame is None:
-                    if required:
-                        raise RuntimeError("required endpoint returned no rows")
-                    continue
-                if frame.empty:
-                    if endpoint == "suspend_d":
-                        _atomic_parquet(
-                            pl.DataFrame(
-                                schema={
-                                    "ts_code": pl.String,
-                                    "trade_date": pl.String,
-                                }
-                            ),
-                            target,
-                        )
-                        written += 1
-                        continue
-                    if required:
-                        raise RuntimeError(
-                            "required endpoint returned no rows"
-                        )
-                    continue
-                _atomic_parquet(_normalize_frame(pl.from_pandas(frame)), target)
-                written += 1
+                _, _, was_written = future.result()
+                written += int(was_written)
             except Exception as error:
                 failures.append(SyncFailure(endpoint, trade_date, str(error)))
-            time.sleep(request_interval_seconds)
 
     coverage = write_dataset_coverage(root)
     report = SyncReport(

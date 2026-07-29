@@ -159,10 +159,14 @@ def _redact_error(error: Any) -> str:
 
 
 def _symbol_to_ts_code(symbol: str) -> str:
-    """Convert bare symbol (e.g. '000001') to ts_code (e.g. '000001.SZ')."""
+    """Convert canonical, bare, or suffixed symbols to Tushare ``ts_code``."""
     symbol = symbol.strip()
     if "." in symbol:
         return symbol.upper()
+    lowered = symbol.lower()
+    for prefix, exchange in (("sh", "SH"), ("sz", "SZ"), ("bj", "BJ")):
+        if lowered.startswith(prefix) and lowered[len(prefix) :].isdigit():
+            return f"{lowered[len(prefix):]}.{exchange}"
     if symbol.startswith("6"):
         return f"{symbol}.SH"
     if symbol.startswith(("0", "3")):

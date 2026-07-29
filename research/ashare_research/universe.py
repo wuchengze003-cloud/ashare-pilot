@@ -26,13 +26,19 @@ def load_universe_intervals(path: Path | str) -> pl.DataFrame:
             "symbol": prefixed_symbol(entry["symbol"]),
             "strategy_from": date.fromisoformat(entry.get("strategy_from", "1900-01-01")),
             "strategy_until": date.fromisoformat(entry.get("strategy_until", "2999-12-31")),
+            "__universe_theme": str(entry.get("theme") or f"未分类/{entry['symbol']}"),
         }
         for entry in entries
         if _participates(entry)
     ]
     return pl.DataFrame(
         rows,
-        schema={"symbol": pl.String, "strategy_from": pl.Date, "strategy_until": pl.Date},
+        schema={
+            "symbol": pl.String,
+            "strategy_from": pl.Date,
+            "strategy_until": pl.Date,
+            "__universe_theme": pl.String,
+        },
     )
 
 
@@ -54,11 +60,18 @@ def filter_frame_to_universe(frame: pl.DataFrame, path: Path | str) -> pl.DataFr
         if date_column != pl.Date
         else pl.col("date").alias("__membership_date")
     )
-    return (
-        working.join(intervals, on="symbol", how="inner")
-        .filter(
-            (pl.col("__membership_date") >= pl.col("strategy_from"))
-            & (pl.col("__membership_date") <= pl.col("strategy_until"))
-        )
-        .drop("__membership_date", "strategy_from", "strategy_until")
+    filtered = working.join(intervals, on="symbol", how="inner").filter(
+        (pl.col("__membership_date") >= pl.col("strategy_from"))
+        & (pl.col("__membership_date") <= pl.col("strategy_until"))
+    )
+    theme_expression = (
+        pl.coalesce("theme", "__universe_theme")
+        if "theme" in working.columns
+        else pl.col("__universe_theme")
+    )
+    return filtered.with_columns(theme_expression.alias("theme")).drop(
+        "__membership_date",
+        "strategy_from",
+        "strategy_until",
+        "__universe_theme",
     )

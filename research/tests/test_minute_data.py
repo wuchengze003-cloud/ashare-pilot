@@ -59,6 +59,8 @@ class TestSymbolConversion:
 
     def test_already_full(self):
         assert _symbol_to_ts_code("000001.SZ") == "000001.SZ"
+        assert _symbol_to_ts_code("sz000001") == "000001.SZ"
+        assert _symbol_to_ts_code("sh688256") == "688256.SH"
 
 
 class TestSegmentDateRanges:

@@ -360,12 +360,17 @@ def train_models(
     execution_columns = [
         "date",
         "symbol",
+        "close",
         "adj_close",
         "next_trade_date",
+        "next_raw_open",
+        "next_raw_close",
         "next_open",
         "next_close",
         "next_can_buy",
         "next_can_sell",
+        "amount",
+        "volatility_20",
         "label_return_5",
         "label_excess_return_5",
     ]

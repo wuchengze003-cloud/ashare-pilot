@@ -3,13 +3,46 @@ from datetime import date, timedelta
 import polars as pl
 import pytest
 
-from ashare_research.features import build_feature_panel
+from ashare_research.features import (
+    _attach_point_in_time_membership,
+    _point_in_time_market_aggregates,
+    build_feature_panel,
+)
 
 
 def write_partition(root, endpoint, frame):
     target = root / "raw" / endpoint / "trade_date=20260101"
     target.mkdir(parents=True)
     frame.write_parquet(target / "part.parquet")
+
+
+def test_market_aggregates_use_only_same_day_universe_members():
+    first = date(2026, 1, 2)
+    second = date(2026, 1, 5)
+    panel = pl.DataFrame(
+        {
+            "date": [first, first, second, second],
+            "symbol": ["sh600001", "sh600002", "sh600001", "sh600002"],
+            "ret_1": [0.10, -0.10, 0.00, 0.20],
+        }
+    ).lazy()
+    membership = pl.DataFrame(
+        {
+            "symbol": ["sh600001", "sh600002"],
+            "member_start": [first, second],
+            "member_end": [second, second],
+        }
+    )
+
+    attached = _attach_point_in_time_membership(panel, membership)
+    aggregates = _point_in_time_market_aggregates(attached).collect()
+
+    first_row = aggregates.filter(pl.col("date") == first)
+    assert first_row["market_breadth"][0] == pytest.approx(1.0)
+    assert first_row["market_return"][0] == pytest.approx(0.10)
+    second_row = aggregates.filter(pl.col("date") == second)
+    assert second_row["market_breadth"][0] == pytest.approx(0.5)
+    assert second_row["market_return"][0] == pytest.approx(0.10)
 
 
 def test_labels_use_next_open_and_future_close(tmp_path):
@@ -92,6 +125,12 @@ def test_labels_use_next_open_and_future_close(tmp_path):
     assert panel["label_downside_3"][0] == pytest.approx(70.0 / 71.0 - 1)
     assert panel["next_trade_date"][0] == date(2026, 3, 3)
     assert panel["next_open"][0] == 71.0
+    assert panel["next_raw_open"][0] == 71.0
+    assert panel["next_adj_factor"][0] == 1.0
+    assert panel["amount"][0] == pytest.approx(10_060_000)
+    assert panel["net_moneyflow_ratio"][0] == pytest.approx(
+        100_000 / 10_060_000
+    )
     assert panel["next_can_buy"][0]
     assert panel["next_can_sell"][0]
     all_rows = pl.read_parquet(output)
@@ -115,6 +154,60 @@ def test_labels_use_next_open_and_future_close(tmp_path):
     )
     assert truncated_result.end_date == "2026-03-05"
     assert pl.read_parquet(truncated)["date"].max() == date(2026, 3, 5)
+
+    production_cost_output = tmp_path / "features" / "production-cost.parquet"
+    build_feature_panel(tmp_path, production_cost_output)
+    production_cost_row = pl.read_parquet(production_cost_output).filter(
+        (pl.col("symbol") == "sz300001")
+        & (pl.col("date") == date(2026, 3, 2))
+    )
+    assert production_cost_row["label_return_3"][0] == pytest.approx(
+        73.5 / 71.0 - 1 - 0.0016
+    )
+    manifest = production_cost_output.with_suffix(".manifest.json").read_text(
+        "utf-8"
+    )
+    assert '"as_of_date": "2026-03-21"' in manifest
+
+    daily_path = (
+        tmp_path
+        / "raw"
+        / "daily"
+        / "trade_date=20260101"
+        / "part.parquet"
+    )
+    missing_trade_date = (start + timedelta(days=65)).strftime("%Y%m%d")
+    pl.read_parquet(daily_path).filter(
+        ~(
+            (pl.col("ts_code") == "300001.SZ")
+            & (pl.col("trade_date") == missing_trade_date)
+        )
+    ).write_parquet(daily_path)
+    suspended_output = tmp_path / "features" / "suspended.parquet"
+    build_feature_panel(tmp_path, suspended_output)
+    pre_suspension = pl.read_parquet(suspended_output).filter(
+        (pl.col("symbol") == "sz300001")
+        & (pl.col("date") == start + timedelta(days=64))
+    )
+    assert pre_suspension["next_trade_date"][0] == start + timedelta(days=65)
+    assert pre_suspension["next_raw_open"].null_count() == 1
+    assert pre_suspension["label_return_1"].null_count() == 1
+
+    adjustment_path = (
+        tmp_path
+        / "raw"
+        / "adj_factor"
+        / "trade_date=20260101"
+        / "part.parquet"
+    )
+    pl.read_parquet(adjustment_path).filter(
+        pl.col("trade_date") != "20260302"
+    ).write_parquet(adjustment_path)
+    with pytest.raises(ValueError, match="adj_factor missing"):
+        build_feature_panel(
+            tmp_path,
+            tmp_path / "features" / "missing-adjustment.parquet",
+        )
 
 
 def test_nonpositive_pe_remains_missing_instead_of_creating_invalid_log(tmp_path):

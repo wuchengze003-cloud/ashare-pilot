@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import polars as pl
 
 from .contracts import HORIZONS
+from .cost_config import load_cost_model
 
-FEATURE_VERSION = "ashare-core-v3"
+FEATURE_VERSION = "ashare-core-v5"
 PRICE_WINDOWS = (1, 3, 5, 10, 20, 60)
 ROLLING_WINDOWS = (5, 10, 20, 60)
 
@@ -51,12 +55,105 @@ def _ensure_columns(frame: pl.LazyFrame, defaults: dict[str, float | None]) -> p
     return frame.with_columns(missing) if missing else frame
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _membership_intervals(path: Path) -> pl.DataFrame:
+    membership = pl.read_parquet(path)
+    required = {"instrument", "member_start", "member_end"}
+    missing = required - set(membership.columns)
+    if missing:
+        raise ValueError(
+            f"universe membership is missing columns: {sorted(missing)}"
+        )
+    return (
+        membership.select(sorted(required))
+        .with_columns(
+            pl.col("instrument").cast(pl.String).str.to_lowercase().alias("symbol"),
+            pl.col("member_start").cast(pl.Date),
+            pl.col("member_end").cast(pl.Date),
+        )
+        .drop("instrument")
+        .sort("symbol", "member_start")
+    )
+
+
+def _ever_member_symbols(membership: pl.DataFrame) -> tuple[str, ...]:
+    symbols = tuple(
+        sorted(
+            {
+                str(value).lower()
+                for value in membership["symbol"].drop_nulls().to_list()
+            }
+        )
+    )
+    if len(symbols) < 800:
+        raise ValueError(
+            f"universe membership has only {len(symbols)} distinct symbols"
+        )
+    return symbols
+
+
+def _attach_point_in_time_membership(
+    panel: pl.LazyFrame,
+    membership: pl.DataFrame,
+) -> pl.LazyFrame:
+    return (
+        panel.sort("symbol", "date")
+        .join_asof(
+            membership.lazy(),
+            left_on="date",
+            right_on="member_start",
+            by="symbol",
+            strategy="backward",
+            check_sortedness=False,
+        )
+        .with_columns(
+            (
+                pl.col("member_start").is_not_null()
+                & (pl.col("date") <= pl.col("member_end"))
+            ).alias("__is_universe_member")
+        )
+        .drop("member_start", "member_end")
+    )
+
+
+def _point_in_time_market_aggregates(panel: pl.LazyFrame) -> pl.LazyFrame:
+    return (
+        panel.filter(pl.col("__is_universe_member"))
+        .group_by("date")
+        .agg(
+            (pl.col("ret_1") > 0).mean().alias("market_breadth"),
+            pl.col("ret_1").mean().alias("market_return"),
+            pl.col("ret_1").std().alias("market_dispersion"),
+        )
+        .sort("date")
+        .with_columns(
+            pl.col("market_breadth").rolling_mean(5).alias("market_breadth_5"),
+            pl.col("market_return").rolling_mean(5).alias("market_return_mean_5"),
+            pl.col("market_return").rolling_mean(20).alias("market_return_mean_20"),
+            pl.col("market_return").rolling_std(20).alias("market_volatility_20"),
+            pl.col("market_dispersion").rolling_mean(5).alias("market_dispersion_5"),
+        )
+    )
+
+
 def build_feature_panel(
     data_root: Path | str,
     output_path: Path | str,
-    round_trip_fee_bps: float = 16.0,  # from config/cost-model.json (buy 5.5 + sell 10.5)
+    round_trip_fee_bps: float | None = None,
     as_of_date: str | None = None,
+    universe_membership_path: Path | str | None = None,
 ) -> FeatureBuildResult:
+    if round_trip_fee_bps is None:
+        round_trip_fee_bps = load_cost_model().round_trip_bps
+    if round_trip_fee_bps < 0:
+        raise ValueError("round_trip_fee_bps must be non-negative")
     data_root = Path(data_root)
     output_path = Path(output_path)
     daily_path = data_root / "raw" / "daily"
@@ -90,12 +187,17 @@ def build_feature_panel(
         # Check if moneyflow data is actually present and non-trivial.
         # A broken feed can produce all-null or all-zero columns, which
         # would silently degenerate the moneyflow features to fake zeros.
-        mf_sample = panel.select(
-            pl.col("net_mf_amount").cast(pl.Float64, strict=False),
+        mf_stats = panel.select(
+            pl.len().alias("rows"),
+            pl.col("net_mf_amount").is_not_null().sum().alias("non_null"),
+            (pl.col("net_mf_amount").cast(pl.Float64, strict=False) != 0.0)
+            .fill_null(False)
+            .sum()
+            .alias("non_zero"),
         ).collect()
-        non_null = int(mf_sample["net_mf_amount"].is_not_null().sum())
-        non_zero = int((mf_sample["net_mf_amount"].cast(pl.Float64) != 0.0).fill_null(False).sum())
-        total_rows = max(mf_sample.height, 1)
+        total_rows = max(int(mf_stats["rows"][0]), 1)
+        non_null = int(mf_stats["non_null"][0])
+        non_zero = int(mf_stats["non_zero"][0])
         coverage = non_null / total_rows
         non_zero_rate = non_zero / max(non_null, 1)
         if coverage > 0.5 and non_zero_rate > 0.01:
@@ -139,9 +241,41 @@ def build_feature_panel(
     panel = panel.with_columns(
         pl.col("trade_date").cast(pl.String).str.strptime(pl.Date, "%Y%m%d").alias("date"),
         pl.col("ts_code").map_elements(canonical_symbol, return_dtype=pl.String).alias("symbol"),
-        pl.col("adj_factor").fill_null(1.0),
+        pl.col("adj_factor").cast(pl.Float64, strict=False),
         pl.col("is_suspended").fill_null(False),
+        # Tushare daily.amount is 千元 while moneyflow amounts are 万元.
+        # Normalize both to人民币元 before capacity and ratio calculations.
+        (pl.col("amount").cast(pl.Float64) * 1_000.0).alias("amount"),
+        (pl.col("net_mf_amount").cast(pl.Float64) * 10_000.0).alias(
+            "net_mf_amount"
+        ),
+        (pl.col("buy_lg_amount").cast(pl.Float64) * 10_000.0).alias(
+            "buy_lg_amount"
+        ),
+        (pl.col("sell_lg_amount").cast(pl.Float64) * 10_000.0).alias(
+            "sell_lg_amount"
+        ),
     ).sort("symbol", "date")
+    membership_path = (
+        Path(universe_membership_path)
+        if universe_membership_path is not None
+        else data_root / "reference" / "csi800_membership.parquet"
+    )
+    materialized_universe = "all-a-share"
+    membership_sha256: str | None = None
+    membership_intervals: pl.DataFrame | None = None
+    if membership_path.is_file():
+        membership_intervals = _membership_intervals(membership_path)
+        panel = panel.filter(
+            pl.col("symbol").is_in(_ever_member_symbols(membership_intervals))
+        )
+        panel = _attach_point_in_time_membership(panel, membership_intervals)
+        materialized_universe = "point-in-time-csi800"
+        membership_sha256 = _file_sha256(membership_path)
+    else:
+        panel = panel.with_columns(
+            pl.lit(True).alias("__is_universe_member")
+        )
     namechange_path = data_root / "reference" / "namechange.parquet"
     if namechange_path.exists():
         namechange = pl.scan_parquet(namechange_path)
@@ -224,6 +358,7 @@ def build_feature_panel(
             (pl.min_horizontal("adj_open", "adj_close") - pl.col("adj_low")) / pl.col("adj_open")
         ).alias("klow"),
     )
+    breadth = _point_in_time_market_aggregates(panel)
 
     feature_names = ["kmid", "klen", "kup", "klow", "ret_1"]
     expressions: list[pl.Expr] = []
@@ -233,6 +368,19 @@ def build_feature_panel(
             (pl.col("adj_close") / pl.col("adj_close").shift(window).over("symbol") - 1).alias(name)
         )
         feature_names.append(name)
+    panel = panel.with_columns(
+        pl.col("adj_close").rolling_min(60).over("symbol").alias("__low_60"),
+        pl.col("adj_close").rolling_max(60).over("symbol").alias("__high_60"),
+    ).with_columns(
+        (
+            (pl.col("adj_close") - pl.col("__low_60"))
+            / (pl.col("__high_60") - pl.col("__low_60"))
+        )
+        .fill_nan(None)
+        .alias("position_60"),
+        (pl.col("adj_close") / pl.col("__high_60") - 1).alias("drawdown_60"),
+    )
+    feature_names.extend(["position_60", "drawdown_60"])
     for window in ROLLING_WINDOWS:
         definitions = {
             f"ma_ratio_{window}": pl.col("adj_close")
@@ -300,18 +448,6 @@ def build_feature_panel(
         ]
     )
     panel = panel.with_columns(expressions)
-    breadth = panel.group_by("date").agg(
-        (pl.col("ret_1") > 0).mean().alias("market_breadth"),
-        pl.col("ret_1").mean().alias("market_return"),
-        pl.col("ret_1").std().alias("market_dispersion"),
-    ).sort("date")
-    breadth = breadth.with_columns(
-        pl.col("market_breadth").rolling_mean(5).alias("market_breadth_5"),
-        pl.col("market_return").rolling_mean(5).alias("market_return_mean_5"),
-        pl.col("market_return").rolling_mean(20).alias("market_return_mean_20"),
-        pl.col("market_return").rolling_std(20).alias("market_volatility_20"),
-        pl.col("market_dispersion").rolling_mean(5).alias("market_dispersion_5"),
-    )
     panel = panel.join(breadth, on="date", how="left").with_columns(
         (pl.col("ret_1") - pl.col("market_return")).alias("market_relative_return")
     )
@@ -329,23 +465,94 @@ def build_feature_panel(
         ]
     )
 
+    maximum_horizon = max(HORIZONS)
+    calendar = panel.select("date").unique().sort("date").with_columns(
+        pl.col("date").shift(-offset).alias(f"__date_plus_{offset}")
+        for offset in range(1, maximum_horizon + 1)
+    )
+    market_rows = panel.select(
+        "symbol",
+        "date",
+        "adj_open",
+        "adj_low",
+        "adj_close",
+        "open",
+        "close",
+        "adj_factor",
+        "up_limit",
+        "down_limit",
+        "is_suspended",
+        "can_buy_open",
+        "can_sell_open",
+    )
+    panel = panel.join(calendar, on="date", how="left")
+    for offset in range(1, maximum_horizon + 1):
+        future = market_rows.select(
+            "symbol",
+            pl.col("date").alias("__target_date"),
+            pl.col("adj_open").alias(f"__adj_open_{offset}"),
+            pl.col("adj_low").alias(f"__adj_low_{offset}"),
+            pl.col("adj_close").alias(f"__adj_close_{offset}"),
+            pl.col("open").alias(f"__raw_open_{offset}"),
+            pl.col("close").alias(f"__raw_close_{offset}"),
+            pl.col("adj_factor").alias(f"__adj_factor_{offset}"),
+            pl.col("up_limit").alias(f"__up_limit_{offset}"),
+            pl.col("down_limit").alias(f"__down_limit_{offset}"),
+            pl.col("is_suspended").alias(f"__is_suspended_{offset}"),
+            pl.col("can_buy_open").alias(f"__can_buy_{offset}"),
+            pl.col("can_sell_open").alias(f"__can_sell_{offset}"),
+        )
+        panel = panel.join(
+            future,
+            left_on=["symbol", f"__date_plus_{offset}"],
+            right_on=["symbol", "__target_date"],
+            how="left",
+        )
+
     label_expressions = []
     for horizon in HORIZONS:
-        entry_open = pl.col("adj_open").shift(-1).over("symbol")
-        exit_close = pl.col("adj_close").shift(-horizon).over("symbol")
+        entry_open = pl.col("__adj_open_1")
+        exit_close = pl.col(f"__adj_close_{horizon}")
+        required_future_prices = pl.all_horizontal(
+            [
+                pl.col("__adj_open_1").is_not_null(),
+                pl.col(f"__adj_close_{horizon}").is_not_null(),
+                *[
+                    pl.col(f"__adj_low_{offset}").is_not_null()
+                    for offset in range(1, horizon + 1)
+                ],
+            ]
+        )
         future_low = pl.min_horizontal(
-            *[pl.col("adj_low").shift(-offset).over("symbol") for offset in range(1, horizon + 1)]
+            *[
+                pl.col(f"__adj_low_{offset}")
+                for offset in range(1, horizon + 1)
+            ]
         )
         label_expressions.extend(
             [
-                (exit_close / entry_open - 1 - round_trip_fee_bps / 10_000).alias(
-                    f"label_return_{horizon}"
-                ),
-                (future_low / entry_open - 1).alias(f"label_downside_{horizon}"),
+                pl.when(required_future_prices)
+                .then(
+                    exit_close
+                    / entry_open
+                    - 1
+                    - round_trip_fee_bps
+                    / 10_000
+                )
+                .otherwise(None)
+                .alias(f"label_return_{horizon}"),
+                pl.when(required_future_prices)
+                .then(future_low / entry_open - 1)
+                .otherwise(None)
+                .alias(f"label_downside_{horizon}"),
             ]
         )
     panel = panel.with_columns(label_expressions)
-    eligible_label_row = (~pl.col("is_st")) & (pl.col("listing_age_bars") >= 60)
+    eligible_label_row = (
+        pl.col("__is_universe_member")
+        & (~pl.col("is_st"))
+        & (pl.col("listing_age_bars") >= 60)
+    )
     panel = panel.with_columns(
         (
             pl.col(f"label_return_{horizon}")
@@ -358,11 +565,17 @@ def build_feature_panel(
         for horizon in HORIZONS
     )
     panel = panel.with_columns(
-        pl.col("date").shift(-1).over("symbol").alias("next_trade_date"),
-        pl.col("adj_open").shift(-1).over("symbol").alias("next_open"),
-        pl.col("adj_close").shift(-1).over("symbol").alias("next_close"),
-        pl.col("can_buy_open").shift(-1).over("symbol").alias("next_can_buy"),
-        pl.col("can_sell_open").shift(-1).over("symbol").alias("next_can_sell"),
+        pl.col("__date_plus_1").alias("next_trade_date"),
+        pl.col("__raw_open_1").alias("next_raw_open"),
+        pl.col("__raw_close_1").alias("next_raw_close"),
+        pl.col("__adj_factor_1").alias("next_adj_factor"),
+        pl.col("__up_limit_1").alias("next_up_limit"),
+        pl.col("__down_limit_1").alias("next_down_limit"),
+        pl.col("__is_suspended_1").alias("next_is_suspended"),
+        pl.col("__adj_open_1").alias("next_open"),
+        pl.col("__adj_close_1").alias("next_close"),
+        pl.col("__can_buy_1").alias("next_can_buy"),
+        pl.col("__can_sell_1").alias("next_can_sell"),
     )
 
     selected = [
@@ -381,6 +594,12 @@ def build_feature_panel(
         "can_buy_open",
         "can_sell_open",
         "next_trade_date",
+        "next_raw_open",
+        "next_raw_close",
+        "next_adj_factor",
+        "next_up_limit",
+        "next_down_limit",
+        "next_is_suspended",
         "next_open",
         "next_close",
         "next_can_buy",
@@ -401,10 +620,51 @@ def build_feature_panel(
         ],
     ]
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    materialized = panel.filter(
-        (~pl.col("is_st")) & (pl.col("listing_age_bars") >= 60)
-    ).select(selected).collect()
-    materialized.write_parquet(output_path, compression="zstd")
+    eligible_panel = panel.filter(
+        pl.col("__is_universe_member")
+        & (~pl.col("is_st"))
+        & (pl.col("listing_age_bars") >= 60)
+    )
+    materialized = eligible_panel.select(selected).collect()
+    missing_adjustment = int(materialized["adj_factor"].null_count())
+    if missing_adjustment:
+        raise ValueError(
+            f"adj_factor missing for {missing_adjustment} feature-panel rows"
+        )
+    missing_execution = materialized.filter(
+        pl.col("next_trade_date").is_not_null()
+        & pl.col("next_raw_open").is_not_null()
+        & (
+            pl.col("next_can_buy").is_null()
+            | pl.col("next_can_sell").is_null()
+            | pl.col("next_is_suspended").is_null()
+            | (
+                (~pl.col("next_is_suspended"))
+                & (
+                    pl.col("next_up_limit").is_null()
+                    | pl.col("next_down_limit").is_null()
+                    | pl.col("next_adj_factor").is_null()
+                )
+            )
+        )
+    ).height
+    if missing_execution:
+        raise ValueError(
+            "price-limit execution flags missing for "
+            f"{missing_execution} feature-panel rows"
+        )
+    fd, temporary = tempfile.mkstemp(
+        prefix=output_path.name,
+        suffix=".tmp",
+        dir=output_path.parent,
+    )
+    os.close(fd)
+    try:
+        materialized.write_parquet(temporary, compression="zstd")
+        os.replace(temporary, output_path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
     dates = materialized["date"]
     manifest = {
         "feature_version": FEATURE_VERSION,
@@ -422,12 +682,28 @@ def build_feature_panel(
         "symbols": materialized["symbol"].n_unique(),
         "start_date": str(dates.min()),
         "end_date": str(dates.max()),
-        "as_of_date": as_of_date,
+        "as_of_date": str(dates.max()),
         "moneyflow_available": moneyflow_available,
+        "materialized_universe": materialized_universe,
+        "market_aggregate_universe": materialized_universe,
+        "universe_membership_sha256": membership_sha256,
+        "units": {
+            "amount": "CNY",
+            "net_mf_amount": "CNY",
+            "buy_lg_amount": "CNY",
+            "sell_lg_amount": "CNY",
+            "volume": "lots",
+        },
     }
-    output_path.with_suffix(".manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", "utf-8"
+    manifest_path = output_path.with_suffix(".manifest.json")
+    manifest_temporary = manifest_path.with_suffix(
+        manifest_path.suffix + ".tmp"
     )
+    manifest_temporary.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        "utf-8",
+    )
+    os.replace(manifest_temporary, manifest_path)
     return FeatureBuildResult(
         output_path,
         materialized.height,

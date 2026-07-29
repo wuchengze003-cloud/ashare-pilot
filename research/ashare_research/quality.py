@@ -74,7 +74,10 @@ def check_moneyflow_quality(
     for name in mf_features:
         if name not in panel.columns:
             continue
-        std_val = float(panel[name].cast(pl.Float64, strict=False).std(fill_null=0.0) or 0.0)
+        std_val = float(
+            panel[name].cast(pl.Float64, strict=False).drop_nulls().std()
+            or 0.0
+        )
         if std_val < 1e-12:
             failures.append(f"{name}: near-zero cross-sectional variance")
 

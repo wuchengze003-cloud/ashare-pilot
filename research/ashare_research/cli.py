@@ -21,7 +21,12 @@ from .candidate import (
     write_promotion_evidence,
 )
 from .contracts import ModelManifest, ModelMetrics, PriceBar, PromotionEvidence
-from .data_sync import sync_tushare
+from .cost_config import load_cost_model
+from .data_sync import (
+    sync_csi800_membership,
+    sync_sw_industry_membership,
+    sync_tushare,
+)
 from .evaluation import evaluate_oos_predictions, write_evaluation_report
 from .experiment import run_challenger_experiment
 from .features import build_feature_panel
@@ -35,6 +40,7 @@ from .ledger import (
     summarize_outcomes,
 )
 from .minute_data import (
+    _symbol_to_ts_code,
     load_daily_volume_map,
     load_suspended_map,
     load_trading_dates,
@@ -42,6 +48,10 @@ from .minute_data import (
     sync_minute_data,
 )
 from .minute_quality import run_minute_quality
+from .minute_race import (
+    build_minute_requirement_manifest,
+    run_minute_race,
+)
 from .monitoring import ModelHealth, rollback_reasons
 from .portfolio import PortfolioConfig
 from .promotion import evaluate_promotion
@@ -59,10 +69,19 @@ from .registry import (
     verify_promotion_evidence,
 )
 from .shadow_evaluation import evaluate_shadow_account, write_shadow_evaluation
+from .strategy_race import run_daily_race
 from .training import train_models
 
 RESEARCH_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUNTIME = RESEARCH_ROOT / "runtime"
+
+
+def _round_trip_fee_bps(legacy_side_fee_bps: float | None) -> float:
+    if legacy_side_fee_bps is None:
+        return load_cost_model().round_trip_bps
+    if legacy_side_fee_bps < 0:
+        raise ValueError("fee_bps must be non-negative")
+    return legacy_side_fee_bps * 2
 
 
 def _date(value: str) -> date:
@@ -171,7 +190,7 @@ def cmd_backfill_outcomes(args) -> int:
         ledger,
         bars,
         _date(args.as_of),
-        round_trip_fee_bps=args.fee_bps * 2,
+        round_trip_fee_bps=_round_trip_fee_bps(args.fee_bps),
     )
     result = {"as_of": args.as_of, "inserted": inserted, "summary": summarize_outcomes(ledger)}
     output = Path(args.output or Path(args.runtime) / "outcomes" / "latest.json")
@@ -190,6 +209,8 @@ def cmd_data_sync(args) -> int:
             _date(args.end),
             env_file=Path(args.env),
             refresh=args.refresh,
+            request_interval_seconds=args.request_interval,
+            max_workers=args.workers,
         )
     except Exception as error:
         status = runtime / "data" / "meta" / "last-sync-error.json"
@@ -224,6 +245,29 @@ def cmd_data_sync(args) -> int:
     return 0 if report.data_quality_passed else 1
 
 
+def cmd_csi800_sync(args) -> int:
+    manifest = sync_csi800_membership(
+        Path(args.runtime) / "data",
+        _date(args.start),
+        _date(args.end),
+        env_file=Path(args.env),
+        refresh=args.refresh,
+        request_interval_seconds=args.request_interval,
+    )
+    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_sw_industry_sync(args) -> int:
+    manifest = sync_sw_industry_membership(
+        Path(args.runtime) / "data",
+        env_file=Path(args.env),
+        request_interval_seconds=args.request_interval,
+    )
+    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_bootstrap_qlib(args) -> int:
     result = bootstrap_qlib_dataset(args.runtime, refresh=args.refresh)
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -252,7 +296,7 @@ def cmd_build_features(args) -> int:
     result = build_feature_panel(
         Path(args.runtime) / "data",
         output,
-        args.fee_bps * 2,
+        _round_trip_fee_bps(args.fee_bps),
         as_of_date=args.as_of,
     )
     manifest = json.loads(output.with_suffix(".manifest.json").read_text("utf-8"))
@@ -271,6 +315,73 @@ def cmd_build_features(args) -> int:
         )
     )
     return 0 if quality.passed else 1
+
+
+def cmd_strategy_race(args) -> int:
+    runtime = Path(args.runtime)
+    report = run_daily_race(
+        panel_path=Path(args.panel or runtime / "features" / "panel.parquet"),
+        config_path=Path(
+            args.config
+            or RESEARCH_ROOT / "config" / "production-race-v1.json"
+        ),
+        output_path=Path(
+            args.output or runtime / "strategy-race" / "daily-report.json"
+        ),
+        industry_membership_path=(
+            Path(args.industry_membership)
+            if args.industry_membership
+            else None
+        ),
+        quality_path=Path(args.quality) if args.quality else None,
+    )
+    print(json.dumps(asdict(report), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_minute_race_plan(args) -> int:
+    runtime = Path(args.runtime)
+    payload = build_minute_requirement_manifest(
+        daily_report_path=Path(
+            args.daily_report
+            or runtime / "strategy-race" / "daily-report.json"
+        ),
+        config_path=Path(
+            args.config
+            or RESEARCH_ROOT / "config" / "production-race-v1.json"
+        ),
+        output_path=Path(
+            args.output
+            or runtime / "strategy-race" / "minute-requirements.json"
+        ),
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_minute_race(args) -> int:
+    runtime = Path(args.runtime)
+    report = run_minute_race(
+        daily_report_path=Path(
+            args.daily_report
+            or runtime / "strategy-race" / "daily-report.json"
+        ),
+        config_path=Path(
+            args.config
+            or RESEARCH_ROOT / "config" / "production-race-v1.json"
+        ),
+        minute_root=Path(args.minute_root or runtime / "minute"),
+        requirement_manifest_path=Path(
+            args.requirements
+            or runtime / "strategy-race" / "minute-requirements.json"
+        ),
+        output_path=Path(
+            args.output
+            or runtime / "strategy-race" / "final-report.json"
+        ),
+    )
+    print(json.dumps(asdict(report), ensure_ascii=False, indent=2))
+    return 0 if report.production_champion is not None else 1
 
 
 def cmd_drift(args) -> int:
@@ -620,6 +731,27 @@ def cmd_minute_sync(args) -> int:
     minute_root = runtime / "minute"
     data_root = runtime / "data"
     symbols = [s.strip() for s in args.symbols.split(",")] if args.symbols else None
+    required_dates: dict[str, set[str]] | None = None
+    if args.requirements:
+        requirements = json.loads(Path(args.requirements).read_text("utf-8"))
+        rows = requirements.get("requirements")
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("minute requirements are empty or invalid")
+        required_dates = {}
+        symbols = []
+        for row in rows:
+            symbol = str(row["symbol"])
+            trade_date = str(row["trade_date"]).replace("-", "")
+            if not args.start.replace("-", "") <= trade_date <= args.end.replace(
+                "-", ""
+            ):
+                raise ValueError(
+                    f"required date {trade_date} is outside sync range"
+                )
+            ts_code = _symbol_to_ts_code(symbol)
+            required_dates.setdefault(ts_code, set()).add(trade_date)
+            symbols.append(symbol)
+        symbols = list(dict.fromkeys(symbols))
 
     trading_dates = load_trading_dates(data_root, args.start, args.end)
     daily_ok, daily_failure = _upstream_coverage_status(
@@ -642,6 +774,17 @@ def cmd_minute_sync(args) -> int:
         data_root, args.start, args.end
     )
     suspended_map = load_suspended_map(data_root, args.start, args.end)
+    if required_dates is not None:
+        daily_volume_map = {
+            ts_code: dates
+            & daily_volume_map.get(ts_code, set())
+            for ts_code, dates in required_dates.items()
+        }
+        suspended_map = {
+            ts_code: dates
+            & suspended_map.get(ts_code, set())
+            for ts_code, dates in required_dates.items()
+        }
 
     report = sync_minute_data(
         minute_root,
@@ -858,7 +1001,11 @@ def parser() -> argparse.ArgumentParser:
     outcomes = commands.add_parser("backfill-outcomes")
     outcomes.add_argument("--as-of", required=True)
     outcomes.add_argument("--panel")
-    outcomes.add_argument("--fee-bps", type=float, default=10)
+    outcomes.add_argument(
+        "--fee-bps",
+        type=float,
+        help="legacy symmetric per-side override; defaults to shared cost model",
+    )
     outcomes.add_argument("--output")
     outcomes.set_defaults(func=cmd_backfill_outcomes)
     sync = commands.add_parser("data-sync")
@@ -866,7 +1013,26 @@ def parser() -> argparse.ArgumentParser:
     sync.add_argument("--end", required=True)
     sync.add_argument("--env", default=str(RESEARCH_ROOT.parent / "pyserver" / ".env"))
     sync.add_argument("--refresh", action="store_true")
+    sync.add_argument("--workers", type=int, default=8)
+    sync.add_argument("--request-interval", type=float, default=0.12)
     sync.set_defaults(func=cmd_data_sync)
+    csi800_sync = commands.add_parser("csi800-sync")
+    csi800_sync.add_argument("--start", required=True)
+    csi800_sync.add_argument("--end", required=True)
+    csi800_sync.add_argument(
+        "--env",
+        default=str(RESEARCH_ROOT.parent / "pyserver" / ".env"),
+    )
+    csi800_sync.add_argument("--refresh", action="store_true")
+    csi800_sync.add_argument("--request-interval", type=float, default=0.12)
+    csi800_sync.set_defaults(func=cmd_csi800_sync)
+    sw_sync = commands.add_parser("sw-industry-sync")
+    sw_sync.add_argument(
+        "--env",
+        default=str(RESEARCH_ROOT.parent / "pyserver" / ".env"),
+    )
+    sw_sync.add_argument("--request-interval", type=float, default=0.12)
+    sw_sync.set_defaults(func=cmd_sw_industry_sync)
     bootstrap = commands.add_parser("bootstrap-qlib")
     bootstrap.add_argument("--refresh", action="store_true")
     bootstrap.set_defaults(func=cmd_bootstrap_qlib)
@@ -877,9 +1043,32 @@ def parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--max-folds", type=int)
     benchmark.set_defaults(func=cmd_qlib_benchmark)
     features = commands.add_parser("build-features")
-    features.add_argument("--fee-bps", type=float, default=10)
+    features.add_argument(
+        "--fee-bps",
+        type=float,
+        help="legacy symmetric per-side override; defaults to shared cost model",
+    )
     features.add_argument("--as-of")
     features.set_defaults(func=cmd_build_features)
+    race = commands.add_parser("strategy-race")
+    race.add_argument("--panel")
+    race.add_argument("--config")
+    race.add_argument("--output")
+    race.add_argument("--quality")
+    race.add_argument("--industry-membership")
+    race.set_defaults(func=cmd_strategy_race)
+    minute_plan = commands.add_parser("minute-race-plan")
+    minute_plan.add_argument("--daily-report")
+    minute_plan.add_argument("--config")
+    minute_plan.add_argument("--output")
+    minute_plan.set_defaults(func=cmd_minute_race_plan)
+    minute_race = commands.add_parser("minute-race")
+    minute_race.add_argument("--daily-report")
+    minute_race.add_argument("--config")
+    minute_race.add_argument("--minute-root")
+    minute_race.add_argument("--requirements")
+    minute_race.add_argument("--output")
+    minute_race.set_defaults(func=cmd_minute_race)
     drift = commands.add_parser("drift")
     drift.add_argument("--panel")
     drift.add_argument("--reference-start")
@@ -902,7 +1091,11 @@ def parser() -> argparse.ArgumentParser:
         "--model-type", choices=["linear", "lightgbm", "double_ensemble"], default="lightgbm"
     )
     challenger.add_argument("--optuna-trials", type=int, default=20)
-    challenger.add_argument("--fee-bps", type=float, default=10)
+    challenger.add_argument(
+        "--fee-bps",
+        type=float,
+        help="legacy symmetric per-side override; defaults to shared cost model",
+    )
     challenger.add_argument("--max-positions", type=int, default=4)
     challenger.set_defaults(func=cmd_run_challenger)
     assessment = commands.add_parser("assess-challenger")
@@ -926,7 +1119,11 @@ def parser() -> argparse.ArgumentParser:
     evaluation.add_argument("--output", required=True)
     evaluation.add_argument("--start-cash", type=float, default=1_000_000)
     evaluation.add_argument("--max-positions", type=int, default=4)
-    evaluation.add_argument("--fee-bps", type=float, default=10)
+    evaluation.add_argument(
+        "--fee-bps",
+        type=float,
+        help="legacy symmetric per-side override; defaults to shared cost model",
+    )
     evaluation.add_argument("--min-expected-return", type=float, default=0.003)
     evaluation.add_argument("--switch-buffer", type=float, default=0.002)
     evaluation.add_argument("--rebalance-threshold-pct", type=float, default=5)
@@ -1006,6 +1203,10 @@ def parser() -> argparse.ArgumentParser:
         default=str(RESEARCH_ROOT.parent / "web" / "data" / "universe.json"),
     )
     msync.add_argument("--symbols", default=None)
+    msync.add_argument(
+        "--requirements",
+        help="sparse minute-race requirement manifest",
+    )
     msync.add_argument("--env", default=str(RESEARCH_ROOT.parent / "pyserver" / ".env"))
     msync.add_argument("--refresh", action="store_true")
     msync.add_argument("--request-interval", type=float, default=0.15)
