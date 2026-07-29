@@ -1,0 +1,75 @@
+{
+  "generated_at": "2026-07-29T04:43:59.391078+00:00",
+  "data_window": {
+    "since": "2018-01-01",
+    "first_calendar_day": "20180102",
+    "last_calendar_day": "20260727",
+    "trading_days": 2077
+  },
+  "stock_basic_status_counts": {
+    "L": 5530,
+    "D": 339
+  },
+  "historical_constituents": {
+    "total_since_2018": 1403,
+    "with_daily_data": 1400,
+    "without_daily_data": [
+      {
+        "symbol": "sh600485",
+        "expected_days": "118",
+        "actual_days": "0",
+        "suspended_days": "118",
+        "missing_days": "0",
+        "coverage_ratio": null,
+        "list_status": "D",
+        "name": "*ST信威(退)",
+        "delist_date": "20210601"
+      },
+      {
+        "symbol": "sz000939",
+        "expected_days": "118",
+        "actual_days": "0",
+        "suspended_days": "118",
+        "missing_days": "0",
+        "coverage_ratio": null,
+        "list_status": "D",
+        "name": "凯迪退(退)",
+        "delist_date": "20201217"
+      },
+      {
+        "symbol": "sz002005",
+        "expected_days": "118",
+        "actual_days": "0",
+        "suspended_days": "118",
+        "missing_days": "0",
+        "coverage_ratio": null,
+        "list_status": "L",
+        "name": "德豪润达",
+        "delist_date": null
+      }
+    ]
+  },
+  "coverage": {
+    "expected_member_days": 1661531,
+    "actual_member_days": 1651045,
+    "suspended_member_days": 10945,
+    "missing_member_days": 35,
+    "adjusted_coverage": 1.000278
+  },
+  "silently_skipped_count": 0,
+  "silently_skipped": [],
+  "gap_members": [],
+  "point_in_time_member_count": {
+    "distribution": {
+      "800": 26
+    },
+    "abnormal_periods": []
+  },
+  "fail_conditions": {
+    "coverage_gap_threshold": 0.95,
+    "max_gap_members": 0,
+    "max_silently_skipped": 0,
+    "fail_reasons": []
+  },
+  "passed": true
+}

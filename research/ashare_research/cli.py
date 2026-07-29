@@ -258,6 +258,20 @@ def cmd_csi800_sync(args) -> int:
     return 0
 
 
+def cmd_audit_universe_coverage(args) -> int:
+    from .universe_coverage import write_coverage_report
+
+    report = write_coverage_report(
+        Path(args.runtime) / "data",
+        args.output,
+        output_text=args.text_output,
+        since=args.since,
+        expected_member_count=args.expected_member_count,
+    )
+    print(json.dumps({"passed": report["passed"], "coverage": report["coverage"]}, ensure_ascii=False, indent=2))
+    return 0 if report["passed"] else 1
+
+
 def cmd_sw_industry_sync(args) -> int:
     manifest = sync_sw_industry_membership(
         Path(args.runtime) / "data",
@@ -1033,6 +1047,12 @@ def parser() -> argparse.ArgumentParser:
     )
     sw_sync.add_argument("--request-interval", type=float, default=0.12)
     sw_sync.set_defaults(func=cmd_sw_industry_sync)
+    audit_universe = commands.add_parser("audit-universe-coverage")
+    audit_universe.add_argument("--output", required=True)
+    audit_universe.add_argument("--text-output")
+    audit_universe.add_argument("--since", default="2018-01-01")
+    audit_universe.add_argument("--expected-member-count", type=int, default=800)
+    audit_universe.set_defaults(func=cmd_audit_universe_coverage)
     bootstrap = commands.add_parser("bootstrap-qlib")
     bootstrap.add_argument("--refresh", action="store_true")
     bootstrap.set_defaults(func=cmd_bootstrap_qlib)
