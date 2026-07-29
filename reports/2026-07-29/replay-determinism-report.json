@@ -1,0 +1,60 @@
+{
+  "report": "replay-determinism",
+  "generated_at": "2026-07-29",
+  "branch": "codex/production-rebuild",
+  "audit_base_commit": "955e4a5ffca6d08538341dbeced09b7fe980da06",
+  "audit_commits": ["6536b56", "535177d", "5421ec4"],
+  "scope": "合并阻塞项 1：复权和点时重放确定性",
+  "protocol": {
+    "description": "在较早 as_of 生成价格/特征/信号/订单/权益并落盘；数据源随后加入更晚数据（含 as_of 之后的除权事件）后以相同 as_of 重放；断言同一 as_of 下历史输入与输出一致。",
+    "numeric_tolerance": 1e-09,
+    "discrete_columns": "信号、订单、持仓、action、symbol、date 等离散列要求完全一致",
+    "ci": ".github/workflows/ci.yml：web job 运行 npm test（含 replay-determinism.test.ts），research job 运行 uv run pytest -q（含 test_replay_determinism.py）"
+  },
+  "tests": [
+    {
+      "file": "research/tests/test_replay_determinism.py",
+      "count": 2,
+      "asserts": "build_feature_panel(as_of=T1) 在截断数据源（T1 之后无数据）与全量数据源（T1 之后含 adj_factor 1.0→2.0、价格减半的除权事件）下逐格一致；数值列容差 1e-9，离散列精确相等",
+      "negative_verification": "临时删除 features.py:165-166 的 as_of 过滤后 2 个测试全部失败，还原后全部通过——测试对点前泄漏有判别力",
+      "status": "pass"
+    },
+    {
+      "file": "web/test/replay-determinism.test.ts",
+      "count": 5,
+      "asserts": "runBacktest 的 trades/signals/equityCurve/positions 在截断 vs 全量（含 T1 后模拟除权）下一致；ruleBasedScorer 与 tideScorer（moneyflow 截断 vs 全量）信号一致",
+      "status": "pass"
+    }
+  ],
+  "code_findings": [
+    {
+      "item": "adj_factor 是否使用决策日之后的数据",
+      "status": "NOT FOUND",
+      "evidence": "research/ashare_research/features.py:165-166 在一切计算前按 as_of 过滤；:325 使用 close*adj_factor（后复权）；Tushare adj_factor 历史值不被未来除权改写"
+    },
+    {
+      "item": "是否使用最新 adj_factor 对整段历史归一化",
+      "status": "NOT FOUND（研究侧）/ CONFIRMED（web legacy 侧，影响有界）",
+      "evidence": "研究侧无 qfq 归一化。web/lib/pyserver.ts:88-91 fetchKlines 使用 qfq：锚点为拉取时最新因子，历史价格水平随未来除权漂移；影响边界——信号基于收益率不变量故信号稳定，价格水平漂移影响仓位金额与费用的精确复现；仅存在于 legacy dashboard 路径，不进入冠军判定/赛马/生产门禁链路。修复属大改，本阶段记录不修。"
+    },
+    {
+      "item": "特征/信号/回测中历史数据被未来除权事件重写",
+      "status": "NOT FOUND（研究侧）/ 同上限定的 CONFIRMED（web qfq 路径）",
+      "evidence": "研究侧特征面板经重放测试验证点时不要求；web 侧 qfq 漂移见上"
+    },
+    {
+      "item": "features、Tide、Prism 中不受 as_of 约束的最新数据调用",
+      "status": "NOT FOUND",
+      "evidence": "web/lib/tide.ts:200-203 rowsAtOrBefore(asOf)；web/lib/prism.ts:243-244 rowsAtOrBefore/latestRowAtOrBefore；web/lib/backtest.ts:153-166 latestFundamentalAsOf 按 effective_date<=date 过滤；web/lib/dashboardData.ts:138-153 effectiveDateForReport 采用法定披露滞后（年报+120 天/半年报+62 天/季报+30 天），保守不前视；全仓 new Date() 调用均为元数据时间戳，不参与决策"
+    },
+    {
+      "item": "ST 判定使用当前名称（附加发现）",
+      "status": "PARTIAL",
+      "evidence": "web/lib/tradingConstraints.ts:140-145 configuredPriceLimitFraction 用 /ST/i.test(当前名称) 判定历史段涨跌停阈值；影响边界：web 引擎历史段涨跌停阈值近似偏差，股票池内 ST 标的极少；研究侧使用 stk_limit 真实涨跌停价，不受影响。本阶段记录不修。"
+    }
+  ],
+  "suite_totals": {
+    "web": { "tests": 158, "status": "pass", "tsc": "pass" },
+    "research": { "tests": 260, "status": "pass" }
+  }
+}
